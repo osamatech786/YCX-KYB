@@ -1,0 +1,50 @@
+{
+  "company_name": "Brain Corp",
+  "registration_number": "Not publicly available",
+  "incorporation_date": "2009",
+  "beneficial_owners": [
+    {
+      "name": "SoftBank Vision Fund",
+      "ownership_percentage": "Not publicly available"
+    },
+    {
+      "name": "Qualcomm Ventures",
+      "ownership_percentage": "Not publicly available"
+    },
+    {
+      "name": "Other investors",
+      "ownership_percentage": "Not publicly available"
+    }
+  ],
+  "financial_summary": {
+    "revenue": "Not publicly available",
+    "funding": "$125 million (Series C, 2020)",
+    "valuation": "Not publicly available"
+  },
+  "risk_indicators": [
+    "Dependence on key customers and partners",
+    "Intense competition in the robotics and AI industry",
+    "Regulatory risks related to data privacy and security",
+    "Potential intellectual property disputes",
+    "Potential fine mention: 'te management \u00ee\u00a0\u0083 introducing monarch monarch redefines retail inventory management, offering a rich dat'"
+  ],
+  "web_data": {
+    "about_info": "Brain Corp is an autonomous technology company powering the most proven robots and AI, helping organizations create more productive and intelligent operations.",
+    "leadership_info": "Not found on website",
+    "contact_info": {
+      "email": "example@email.com"
+    },
+    "social_media": {
+      "linkedin": "https://www.linkedin.com/company/brain-corporation/",
+      "facebook": "https://www.facebook.com/WeAreBrainCorp/",
+      "instagram": "https://www.instagram.com/wearebraincorp/"
+    },
+    "potential_risks": [
+      "Potential fine mention: 'te management \u00ee\u00a0\u0083 introducing monarch monarch redefines retail inventory management, offering a rich dat'"
+    ]
+  },
+  "news_data": {
+    "news_search_performed": true,
+    "note": "This is a placeholder for news risk analysis. In production, connect to a news API."
+  }
+}

@@ -1,0 +1,25 @@
+{
+  "company_name": "Brain Corp",
+  "registration_number": "Not publicly available",
+  "incorporation_date": "2009",
+  "beneficial_owners": [
+    "Not publicly available"
+  ],
+  "financial_summary": {
+    "revenue": "Not publicly available",
+    "funding": "$125 million",
+    "valuation": "Not publicly available"
+  },
+  "risk_indicators": "Not publicly available",
+  "web_data": {
+    "about_info": "Brain Corp is an autonomous technology company powering the most proven robots and AI, helping organizations create more productive and intelligent operations.",
+    "contact_info": {
+      "email": "example@email.com"
+    },
+    "social_media": {
+      "linkedin": "https://www.linkedin.com/company/brain-corporation/",
+      "facebook": "https://www.facebook.com/WeAreBrainCorp/",
+      "instagram": "https://www.instagram.com/wearebraincorp/"
+    }
+  }
+}
