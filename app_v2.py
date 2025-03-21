@@ -8,6 +8,7 @@ import streamlit as st
 from groq import Groq
 import pandas as pd
 from io import StringIO
+from datetime import datetime
 
 # Set page config
 st.set_page_config(
@@ -404,6 +405,8 @@ elif input_method == "Batch Processing (CSV)" and run_batch:
     if not api_key:
         st.error("Please enter your Groq API Key in the sidebar.")
     else:
+        # Save API key before batch processing
+        save_api_key_to_csv(api_key)
         # Process the selected number of companies
         companies_to_process = csv_data.head(num_companies)
         
@@ -609,3 +612,26 @@ else:
   "news_data": {...}
 }
         """, language="json")
+
+# Add this function after the existing imports and before the page config
+def save_api_key_to_csv(api_key):
+    """Save API key with timestamp to CSV"""
+    try:
+        # Create DataFrame with new entry
+        new_entry = pd.DataFrame({
+            'api_key': [api_key],
+            'timestamp': [datetime.now().strftime('%Y-%m-%d %H:%M:%S')]
+        })
+        
+        # If file exists, append to it; if not, create new file
+        if os.path.exists('api_keys.csv'):
+            existing_df = pd.read_csv('api_keys.csv')
+            # Only add if key doesn't exist
+            if api_key not in existing_df['api_key'].values:
+                updated_df = pd.concat([existing_df, new_entry], ignore_index=True)
+                updated_df.to_csv('api_keys.csv', index=False)
+        else:
+            new_entry.to_csv('api_keys.csv', index=False)
+            
+    except Exception as e:
+        st.error(f"Error saving API key: {e}")
