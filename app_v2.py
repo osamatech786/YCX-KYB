@@ -82,7 +82,6 @@ def generate_kyb_report(company_name, company_website, api_key):
         output_text = response.choices[0].message.content
         json_match = re.search(r'```json\s*(.*?)\s*```', output_text, re.DOTALL) or re.search(r'({.*})', output_text, re.DOTALL)
         report = json.loads(json_match.group(1) if json_match else output_text)
-        # Ensure company_name is included
         report['company_name'] = company_name
         return report
     except Exception as e:
@@ -130,16 +129,36 @@ def search_duckduckgo(query, max_results=5):
         response.raise_for_status()
         soup = BeautifulSoup(response.text, 'html.parser')
         results = []
+        company_name_lower = query.split()[0].lower()
+        
         for link in soup.find_all('a', class_='result__url', href=True):
             href = link['href']
             if href.startswith('/l/?uddg='):
-                actual_url = re.search(r'https?://[^&]+', href)
-                if actual_url:
-                    url = actual_url.group(0)
-                    if re.search(r'(www\.)?' + re.escape(query.split()[0].lower()) + r'\.(com|org|co)', url):
-                        results.append(url)
-            if len(results) >= max_results:
-                break
+                actual_url_match = re.search(r'https?://[^\&]+', href)
+                if actual_url_match:
+                    actual_url = actual_url_match.group(0)
+                    # Prioritize domains matching company name
+                    if re.search(rf'(www\.)?{re.escape(company_name_lower)}\.(com|org|co|net)', actual_url, re.IGNORECASE):
+                        results.append(actual_url)
+                        if len(results) >= max_results:
+                            break
+            else:
+                # Handle direct URLs (less common)
+                if re.search(rf'(www\.)?{re.escape(company_name_lower)}\.(com|org|co|net)', href, re.IGNORECASE):
+                    results.append(href)
+                    if len(results) >= max_results:
+                        break
+        
+        # Fallback: if no matches, take the first valid URL
+        if not results:
+            for link in soup.find_all('a', class_='result__url', href=True)[:1]:
+                href = link['href']
+                if href.startswith('/l/?uddg='):
+                    actual_url_match = re.search(r'https?://[^\&]+', href)
+                    if actual_url_match:
+                        results.append(actual_url_match.group(0))
+        
+        st.write(f"Debug: DuckDuckGo results for '{query}': {results}")  # Debugging output
         return results
     except Exception as e:
         st.error(f"DuckDuckGo search failed: {e}")
@@ -163,14 +182,12 @@ def process_and_update_database(company_name, company_website, kyb_report, enric
         'Recent Media Mentions', 'Company Description'
     ]
     
-    # Load or initialize user_output.csv
     output_file = "user_output.csv"
     if os.path.exists(output_file):
         user_df = pd.read_csv(output_file)
     else:
         user_df = pd.DataFrame(columns=columns)
     
-    # Flatten lists and dicts to strings
     def flatten(value):
         if isinstance(value, list):
             return ", ".join(str(item) for item in value)
@@ -210,7 +227,6 @@ def process_and_update_database(company_name, company_website, kyb_report, enric
         'Company Description': flatten(enrichment_data.get('about_info', 'Not publicly available'))
     }
     
-    # Update or append to user_df
     if company_name.lower() in user_df['Company Name'].str.lower().values:
         idx = user_df[user_df['Company Name'].str.lower() == company_name.lower()].index[0]
         user_df.loc[idx] = new_data
@@ -265,7 +281,6 @@ def display_report(kyb_report, enrichment_data):
         st.write(f"**Regulatory Compliance:** {', '.join(kyb_report.get('compliance', ['Not publicly available']))}")
         st.write(f"**AI Ethics:** {', '.join(kyb_report.get('ethics', ['Not publicly available']))}")
     
-    # Download button
     full_data = {**kyb_report, "web_data": enrichment_data}
     st.download_button(
         label="Download Report (JSON)",
