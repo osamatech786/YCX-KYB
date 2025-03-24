@@ -54,56 +54,63 @@ def generate_kyb_report(company_name, company_website, api_key):
         {"role": "user", "content": user_prompt}
     ]
     
-    try:
-        response = client.chat.completions.create(
-            messages=messages,
-            model="llama-3.3-70b-versatile",
-            temperature=0.3,
-            top_p=1,
-            max_tokens=1024
-        )
-        output_text = response.choices[0].message.content
-        
-        # Extract JSON from the response
-        json_match = re.search(r'```json\s*(.*?)\s*```', output_text, re.DOTALL) or re.search(r'({.*})', output_text, re.DOTALL)
-        if json_match:
-            output_text = json_match.group(1)
-        
-        kyb_report = json.loads(output_text)
-        
-        # Ensure required fields are present
-        kyb_report['company_name'] = company_name
-        kyb_report.setdefault('registration_number', 'Not publicly available')
-        kyb_report.setdefault('incorporation_date', 'Not publicly available')
-        kyb_report.setdefault('beneficial_owners', [])
-        kyb_report.setdefault('financial_summary', 'Not publicly available')
-        kyb_report.setdefault('risk_indicators', [])
-        
-        # Normalize beneficial_owners to list
-        if isinstance(kyb_report['beneficial_owners'], str):
-            if kyb_report['beneficial_owners'] == 'Not publicly available':
-                kyb_report['beneficial_owners'] = []
+    # Retry mechanism for API call
+    for attempt in range(3):
+        try:
+            response = client.chat.completions.create(
+                messages=messages,
+                model="llama-3.3-70b-versatile",
+                temperature=0.3,
+                top_p=1,
+                max_tokens=1024,
+                timeout=30  # Increased timeout
+            )
+            output_text = response.choices[0].message.content
+            
+            # Extract JSON from the response
+            json_match = re.search(r'```json\s*(.*?)\s*```', output_text, re.DOTALL) or re.search(r'({.*})', output_text, re.DOTALL)
+            if json_match:
+                output_text = json_match.group(1)
+            
+            kyb_report = json.loads(output_text)
+            
+            # Ensure required fields are present
+            kyb_report['company_name'] = company_name
+            kyb_report.setdefault('registration_number', 'Not publicly available')
+            kyb_report.setdefault('incorporation_date', 'Not publicly available')
+            kyb_report.setdefault('beneficial_owners', [])
+            kyb_report.setdefault('financial_summary', 'Not publicly available')
+            kyb_report.setdefault('risk_indicators', [])
+            
+            # Normalize beneficial_owners to list
+            if isinstance(kyb_report['beneficial_owners'], str):
+                if kyb_report['beneficial_owners'] == 'Not publicly available':
+                    kyb_report['beneficial_owners'] = []
+                else:
+                    kyb_report['beneficial_owners'] = [{"name": kyb_report['beneficial_owners'], "ownership_percentage": "Unknown"}]
+            
+            # Normalize risk_indicators to list
+            if isinstance(kyb_report['risk_indicators'], str):
+                if kyb_report['risk_indicators'] == 'Not publicly available':
+                    kyb_report['risk_indicators'] = []
+                else:
+                    kyb_report['risk_indicators'] = [kyb_report['risk_indicators']]
+            
+            return kyb_report
+        except Exception as e:
+            st.warning(f"Attempt {attempt + 1} failed: {e}")
+            if attempt < 2:
+                time.sleep(2)  # Wait before retrying
             else:
-                kyb_report['beneficial_owners'] = [{"name": kyb_report['beneficial_owners'], "ownership_percentage": "Unknown"}]
-        
-        # Normalize risk_indicators to list
-        if isinstance(kyb_report['risk_indicators'], str):
-            if kyb_report['risk_indicators'] == 'Not publicly available':
-                kyb_report['risk_indicators'] = []
-            else:
-                kyb_report['risk_indicators'] = [kyb_report['risk_indicators']]
-        
-        return kyb_report
-    except Exception as e:
-        st.error(f"Error during Groq API call or JSON parsing: {e}")
-        return {
-            "company_name": company_name,
-            "registration_number": "Not publicly available",
-            "incorporation_date": "Not publicly available",
-            "beneficial_owners": [],
-            "financial_summary": "Not publicly available",
-            "risk_indicators": []
-        }
+                st.error(f"Error during Groq API call or JSON parsing after 3 attempts: {e}")
+                return {
+                    "company_name": company_name,
+                    "registration_number": "Not publicly available",
+                    "incorporation_date": "Not publicly available",
+                    "beneficial_owners": [],
+                    "financial_summary": "Not publicly available",
+                    "risk_indicators": []
+                }
 
 def scrape_additional_data(company_name, company_website):
     """Scrapes the company's public website for additional information."""
@@ -112,7 +119,7 @@ def scrape_additional_data(company_name, company_website):
         res = requests.get(company_website, headers=headers, timeout=15)
         res.raise_for_status()
     except Exception as e:
-        return {"about_info": f"Failed to retrieve website data: {e}"}
+        return {"about_info": "N/A"}  # Return "N/A" instead of error message
     
     soup = BeautifulSoup(res.text, 'html.parser')
     about_text = ""
@@ -193,6 +200,10 @@ def process_and_update_database(company_name, company_website, kyb_report, enric
     output_file = "user_output.csv"
     if os.path.exists(output_file):
         user_df = pd.read_csv(output_file)
+        # Ensure all columns exist in the existing CSV
+        for col in columns:
+            if col not in user_df.columns:
+                user_df[col] = "N/A"
     else:
         user_df = pd.DataFrame(columns=columns)
     
@@ -215,7 +226,7 @@ def process_and_update_database(company_name, company_website, kyb_report, enric
         'Beneficial Owners': flatten(kyb_report.get('beneficial_owners', [])),
         'Financial Summary': flatten(kyb_report.get('financial_summary', 'Not publicly available')),
         'Risk Indicators': flatten(kyb_report.get('risk_indicators', [])),
-        'Company Description': flatten(enrichment_data.get('about_info', 'Not publicly available'))
+        'Company Description': flatten(enrichment_data.get('about_info', 'N/A'))
     }
     
     if company_name.lower() in user_df['Company Name'].str.lower().values:
@@ -252,7 +263,7 @@ def display_report(kyb_report, enrichment_data, company_website):
             st.write(financial_summary)
         
         st.subheader("Company Description")
-        st.write(enrichment_data.get('about_info', 'Not publicly available'))
+        st.write(enrichment_data.get('about_info', 'N/A'))
     
     with tab2:
         st.subheader("Beneficial Owners")
@@ -316,12 +327,9 @@ if run_button:
 
             with st.spinner(f"Processing {company_name}..."):
                 kyb_report = generate_kyb_report(company_name, company_website, api_key)
-                if not kyb_report or "error" in kyb_report:
-                    st.error("KYB report generation failed.")
-                else:
-                    enrichment_data = scrape_additional_data(company_name, company_website)
-                    process_and_update_database(company_name, company_website, kyb_report, enrichment_data, core_df)
-                    display_report(kyb_report, enrichment_data, company_website)
+                enrichment_data = scrape_additional_data(company_name, company_website)
+                process_and_update_database(company_name, company_website, kyb_report, enrichment_data, core_df)
+                display_report(kyb_report, enrichment_data, company_website)
 
         except Exception as e:
             st.error(f"Error processing request: {e}")
