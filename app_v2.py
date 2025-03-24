@@ -116,7 +116,7 @@ def scrape_additional_data(company_name, company_website):
     return {"about_info": about_text[:500] + "..." if len(about_text) > 500 else about_text}
 
 def search_duckduckgo(query, max_results=5):
-    """Search DuckDuckGo without an API key."""
+    """Search DuckDuckGo without an API key, prioritizing official websites."""
     url = "https://duckduckgo.com/html/"
     headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/91.0.4472.124'}
     params = {"q": query}
@@ -126,15 +126,17 @@ def search_duckduckgo(query, max_results=5):
         response.raise_for_status()
         soup = BeautifulSoup(response.text, 'html.parser')
         results = []
-        for link in soup.find_all('a', class_='result__url', href=True)[:max_results]:
+        for link in soup.find_all('a', class_='result__url', href=True):
             href = link['href']
             if href.startswith('/l/?uddg='):
-                # Extract the actual URL from DuckDuckGo's redirect
-                actual_url = re.search(r'https?://[^\&]+', href)
+                actual_url = re.search(r'https?://[^&]+', href)
                 if actual_url:
-                    results.append(actual_url.group(0))
-            else:
-                results.append(href)
+                    url = actual_url.group(0)
+                    # Filter for likely official sites
+                    if re.search(r'(www\.)?' + re.escape(query.split()[0].lower()) + r'\.(com|org|co)', url):
+                        results.append(url)
+            if len(results) >= max_results:
+                break
         return results
     except Exception as e:
         st.error(f"DuckDuckGo search failed: {e}")
@@ -146,14 +148,79 @@ def find_company_website(company_name):
     results = search_duckduckgo(query, max_results=1)
     return results[0] if results else None
 
-def process_company(company_name, company_website, api_key):
-    """Process a single company and return the full KYB profile."""
-    kyb_report = generate_kyb_report(company_name, company_website, api_key)
-    if not kyb_report or "error" in kyb_report:
-        return {"company_name": company_name, "error": "KYB report generation failed"}
+def process_and_update_database(company_name, company_website, kyb_report, enrichment_data, core_df):
+    """Update user_output.csv with new company data, keeping core dataset unchanged."""
+    # Define column names matching knowYourAi - Company Details.csv
+    columns = [
+        'Company Name', 'Website', 'Industry', 'Headquarters', 'Founding Year', 'No.Employees',
+        'Funding Raised', 'Revenue', 'Company Valuation', 'Founders', 'Key Contacts',
+        'AI Model Used', 'Primary AI Use Case', 'AI Frameworks Used', 'AI Products/Services Offered',
+        'Patent Details', 'AI Research Papers Published', 'Partnerships', 'Tech Stack',
+        'Customer Base', 'Case Studies', 'Awards', 'Compliance and Regulatory Adherence',
+        'Market Presence', 'Community Engagement', 'AI Ethics Policies', 'Competitor Analysis',
+        'Recent Media Mentions', 'Company Description'
+    ]
     
-    enrichment_data = scrape_additional_data(company_name, company_website)
-    return {**kyb_report, "web_data": enrichment_data}
+    # Load or initialize user_output.csv
+    output_file = "user_output.csv"
+    if os.path.exists(output_file):
+        user_df = pd.read_csv(output_file)
+    else:
+        user_df = pd.DataFrame(columns=columns)
+    
+    # Prepare new entry
+    new_data = {
+        'Company Name': company_name,
+        'Website': company_website,
+        'Industry': kyb_report.get('industry', 'Not publicly available'),
+        'Headquarters': kyb_report.get('headquarters', 'Not publicly available'),
+        'Founding Year': kyb_report.get('founding_year', 'Not publicly available'),
+        'No.Employees': kyb_report.get('employees', 'Not publicly available'),
+        'Funding Raised': kyb_report.get('funding', 'Not publicly available'),
+        'Revenue': kyb_report.get('revenue', 'Not publicly available'),
+        'Company Valuation': kyb_report.get('valuation', 'Not publicly available'),
+        'Founders': kyb_report.get('founders', 'Not publicly available'),
+        'Key Contacts': kyb_report.get('key_contacts', 'Not publicly available'),
+        'AI Model Used': kyb_report.get('ai_models', 'Not publicly available'),
+        'Primary AI Use Case': kyb_report.get('ai_use_case', 'Not publicly available'),
+        'AI Frameworks Used': kyb_report.get('ai_frameworks', 'Not publicly available'),
+        'AI Products/Services Offered': kyb_report.get('ai_products', 'Not publicly available'),
+        'Patent Details': kyb_report.get('patents', 'Not publicly available'),
+        'AI Research Papers Published': kyb_report.get('research_papers', 'Not publicly available'),
+        'Partnerships': kyb_report.get('partnerships', 'Not publicly available'),
+        'Tech Stack': kyb_report.get('tech_stack', 'Not publicly available'),
+        'Customer Base': kyb_report.get('customers', 'Not publicly available'),
+        'Case Studies': kyb_report.get('case_studies', 'Not publicly available'),
+        'Awards': kyb_report.get('awards', 'Not publicly available'),
+        'Compliance and Regulatory Adherence': kyb_report.get('compliance', 'Not publicly available'),
+        'Market Presence': kyb_report.get('market_presence', 'Not publicly available'),
+        'Community Engagement': kyb_report.get('community', 'Not publicly available'),
+        'AI Ethics Policies': kyb_report.get('ethics', 'Not publicly available'),
+        'Competitor Analysis': kyb_report.get('competitors', 'Not publicly available'),
+        'Recent Media Mentions': kyb_report.get('media', 'Not publicly available'),
+        'Company Description': enrichment_data.get('about_info', 'Not publicly available')
+    }
+    
+    # Update or append to user_df
+    if company_name.lower() in user_df['Company Name'].str.lower().values:
+        idx = user_df[user_df['Company Name'].str.lower() == company_name.lower()].index[0]
+        user_df.loc[idx] = new_data
+    else:
+        user_df = pd.concat([user_df, pd.DataFrame([new_data])], ignore_index=True)
+    
+    # Save to user_output.csv
+    user_df.to_csv(output_file, index=False)
+
+def display_report(kyb_report, enrichment_data):
+    """Display the KYB report in a structured format."""
+    st.subheader("KYB Report")
+    st.json({**kyb_report, "web_data": enrichment_data})
+    st.download_button(
+        label="Download Report (JSON)",
+        data=json.dumps({**kyb_report, "web_data": enrichment_data}, indent=2),
+        file_name=f"{kyb_report['company_name'].replace(' ', '_')}_kyb_report.json",
+        mime="application/json"
+    )
 
 # Sidebar for inputs
 with st.sidebar:
@@ -169,12 +236,12 @@ if run_button:
     elif not company_name:
         st.error("Please enter a Company Name.")
     else:
-        # Try to find company in database
         try:
-            df = pd.read_csv("knowYourAi - Company Details.csv")
-            company_data = df[df['Company Name'].str.lower() == company_name.lower()]
+            # Load core dataset (read-only)
+            core_df = pd.read_csv("knowYourAi - Company Details.csv")
+            company_data = core_df[core_df['Company Name'].str.lower() == company_name.lower()]
             
-            if len(company_data) > 0:
+            if not company_data.empty:
                 st.success(f"Found existing data for {company_name}")
                 company_website = company_data.iloc[0]['Website'].split(' [')[0]  # Remove source label if present
             else:
@@ -186,19 +253,12 @@ if run_button:
                 st.success(f"Found company website: {company_website}")
 
             with st.spinner(f"Processing {company_name}..."):
-                # Generate KYB report
                 kyb_report = generate_kyb_report(company_name, company_website, api_key)
-                
-                if not kyb_report:
+                if not kyb_report or "error" in kyb_report:
                     st.error("KYB report generation failed.")
                 else:
-                    # Scrape additional data
                     enrichment_data = scrape_additional_data(company_name, company_website)
-                    
-                    # Process and update database
-                    process_and_update_database(company_name, company_website, kyb_report, enrichment_data, df)
-                    
-                    # Display report
+                    process_and_update_database(company_name, company_website, kyb_report, enrichment_data, core_df)
                     display_report(kyb_report, enrichment_data)
 
         except Exception as e:
