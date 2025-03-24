@@ -28,42 +28,25 @@ def generate_kyb_report(company_name, company_website, api_key):
     """Uses Groq API to generate a KYB report with enhanced prompt."""
     client = Groq(api_key=api_key)
     
-    system_prompt = """You are a seasoned business analyst. When given a company name and website, 
-    gather and summarize the following details in a structured JSON format:
-    {
-        "company_name": "Company name",
-        "industry": "Company's industry",
-        "headquarters": "Company HQ location",
-        "founding_year": "Year founded",
-        "employees": "Number of employees",
-        "funding": "Total funding raised",
-        "revenue": "Annual revenue",
-        "valuation": "Company valuation",
-        "founders": "Founders names and LinkedIn URLs",
-        "key_contacts": "Key executive contacts",
-        "ai_models": "AI models used",
-        "ai_use_case": "Primary AI use cases",
-        "ai_frameworks": "AI frameworks used",
-        "ai_products": "AI products/services offered",
-        "patents": "Patent details",
-        "research_papers": "Published research papers",
-        "partnerships": "Key partnerships",
-        "tech_stack": "Technology stack",
-        "customers": "Notable customers",
-        "case_studies": "Case studies",
-        "awards": "Awards and recognition",
-        "compliance": "Compliance and regulatory adherence",
-        "market_presence": "Market presence",
-        "community": "Community engagement",
-        "ethics": "AI ethics policies",
-        "competitors": "Competitor analysis",
-        "media": "Recent media mentions"
-    }
-    Use 'Not publicly available' for missing data."""
+    system_prompt = (
+        "You are a seasoned business analyst with expertise in KYB due diligence. "
+        "When given a company name and website, gather and summarize the following details: "
+        "registration number, incorporation date, beneficial owners, key financial metrics, "
+        "and any public risk indicators. Output ONLY a valid JSON object with keys: "
+        "company_name, registration_number, incorporation_date, beneficial_owners, financial_summary, risk_indicators. "
+        "For beneficial_owners, provide an array of objects with name and ownership_percentage when available. "
+        "DO NOT include any explanatory text outside the JSON object. "
+        "Ensure the response is properly formatted JSON that can be parsed by json.loads()."
+    )
     
     user_prompt = (
         f"Company Name: {company_name}\nWebsite: {company_website}\n\n"
-        f"Please research {company_name} and provide all available information in JSON format."
+        f"Please research {company_name} and provide all available information in JSON format. "
+        f"Pay special attention to beneficial owners (with their ownership percentages if available) "
+        f"and any risk indicators such as regulatory issues, legal disputes, negative news, "
+        f"or financial concerns. If specific data points are not publicly available, "
+        f"use 'Not publicly available' as the value, but try to find as much information "
+        f"as possible from public sources."
     )
     
     messages = [
@@ -80,13 +63,47 @@ def generate_kyb_report(company_name, company_website, api_key):
             max_tokens=1024
         )
         output_text = response.choices[0].message.content
+        
+        # Extract JSON from the response
         json_match = re.search(r'```json\s*(.*?)\s*```', output_text, re.DOTALL) or re.search(r'({.*})', output_text, re.DOTALL)
-        report = json.loads(json_match.group(1) if json_match else output_text)
-        report['company_name'] = company_name
-        return report
+        if json_match:
+            output_text = json_match.group(1)
+        
+        kyb_report = json.loads(output_text)
+        
+        # Ensure required fields are present
+        kyb_report['company_name'] = company_name
+        kyb_report.setdefault('registration_number', 'Not publicly available')
+        kyb_report.setdefault('incorporation_date', 'Not publicly available')
+        kyb_report.setdefault('beneficial_owners', [])
+        kyb_report.setdefault('financial_summary', 'Not publicly available')
+        kyb_report.setdefault('risk_indicators', [])
+        
+        # Normalize beneficial_owners to list
+        if isinstance(kyb_report['beneficial_owners'], str):
+            if kyb_report['beneficial_owners'] == 'Not publicly available':
+                kyb_report['beneficial_owners'] = []
+            else:
+                kyb_report['beneficial_owners'] = [{"name": kyb_report['beneficial_owners'], "ownership_percentage": "Unknown"}]
+        
+        # Normalize risk_indicators to list
+        if isinstance(kyb_report['risk_indicators'], str):
+            if kyb_report['risk_indicators'] == 'Not publicly available':
+                kyb_report['risk_indicators'] = []
+            else:
+                kyb_report['risk_indicators'] = [kyb_report['risk_indicators']]
+        
+        return kyb_report
     except Exception as e:
-        st.error(f"Error during Groq API call: {e}")
-        return {"company_name": company_name, "error": str(e)}
+        st.error(f"Error during Groq API call or JSON parsing: {e}")
+        return {
+            "company_name": company_name,
+            "registration_number": "Not publicly available",
+            "incorporation_date": "Not publicly available",
+            "beneficial_owners": [],
+            "financial_summary": "Not publicly available",
+            "risk_indicators": []
+        }
 
 def scrape_additional_data(company_name, company_website):
     """Scrapes the company's public website for additional information."""
@@ -137,19 +154,16 @@ def search_duckduckgo(query, max_results=5):
                 actual_url_match = re.search(r'https?://[^\&]+', href)
                 if actual_url_match:
                     actual_url = actual_url_match.group(0)
-                    # Prioritize domains matching company name
                     if re.search(rf'(www\.)?{re.escape(company_name_lower)}\.(com|org|co|net)', actual_url, re.IGNORECASE):
                         results.append(actual_url)
                         if len(results) >= max_results:
                             break
             else:
-                # Handle direct URLs (less common)
                 if re.search(rf'(www\.)?{re.escape(company_name_lower)}\.(com|org|co|net)', href, re.IGNORECASE):
                     results.append(href)
                     if len(results) >= max_results:
                         break
         
-        # Fallback: if no matches, take the first valid URL
         if not results:
             for link in soup.find_all('a', class_='result__url', href=True)[:1]:
                 href = link['href']
@@ -158,7 +172,6 @@ def search_duckduckgo(query, max_results=5):
                     if actual_url_match:
                         results.append(actual_url_match.group(0))
         
-        st.write(f"Debug: DuckDuckGo results for '{query}': {results}")  # Debugging output
         return results
     except Exception as e:
         st.error(f"DuckDuckGo search failed: {e}")
@@ -173,13 +186,8 @@ def find_company_website(company_name):
 def process_and_update_database(company_name, company_website, kyb_report, enrichment_data, core_df):
     """Update user_output.csv with new company data, keeping core dataset unchanged."""
     columns = [
-        'Company Name', 'Website', 'Industry', 'Headquarters', 'Founding Year', 'No.Employees',
-        'Funding Raised', 'Revenue', 'Company Valuation', 'Founders', 'Key Contacts',
-        'AI Model Used', 'Primary AI Use Case', 'AI Frameworks Used', 'AI Products/Services Offered',
-        'Patent Details', 'AI Research Papers Published', 'Partnerships', 'Tech Stack',
-        'Customer Base', 'Case Studies', 'Awards', 'Compliance and Regulatory Adherence',
-        'Market Presence', 'Community Engagement', 'AI Ethics Policies', 'Competitor Analysis',
-        'Recent Media Mentions', 'Company Description'
+        'Company Name', 'Website', 'Registration Number', 'Incorporation Date', 
+        'Beneficial Owners', 'Financial Summary', 'Risk Indicators', 'Company Description'
     ]
     
     output_file = "user_output.csv"
@@ -190,6 +198,10 @@ def process_and_update_database(company_name, company_website, kyb_report, enric
     
     def flatten(value):
         if isinstance(value, list):
+            if not value:
+                return "None"
+            if isinstance(value[0], dict):
+                return ", ".join(f"{item.get('name', 'Unknown')} ({item.get('ownership_percentage', 'Unknown')})" for item in value)
             return ", ".join(str(item) for item in value)
         elif isinstance(value, dict):
             return ", ".join(f"{k}: {v}" for k, v in value.items())
@@ -198,32 +210,11 @@ def process_and_update_database(company_name, company_website, kyb_report, enric
     new_data = {
         'Company Name': company_name,
         'Website': company_website,
-        'Industry': flatten(kyb_report.get('industry', 'Not publicly available')),
-        'Headquarters': flatten(kyb_report.get('headquarters', 'Not publicly available')),
-        'Founding Year': flatten(kyb_report.get('founding_year', 'Not publicly available')),
-        'No.Employees': flatten(kyb_report.get('employees', 'Not publicly available')),
-        'Funding Raised': flatten(kyb_report.get('funding', 'Not publicly available')),
-        'Revenue': flatten(kyb_report.get('revenue', 'Not publicly available')),
-        'Company Valuation': flatten(kyb_report.get('valuation', 'Not publicly available')),
-        'Founders': flatten(kyb_report.get('founders', 'Not publicly available')),
-        'Key Contacts': flatten(kyb_report.get('key_contacts', 'Not publicly available')),
-        'AI Model Used': flatten(kyb_report.get('ai_models', 'Not publicly available')),
-        'Primary AI Use Case': flatten(kyb_report.get('ai_use_case', 'Not publicly available')),
-        'AI Frameworks Used': flatten(kyb_report.get('ai_frameworks', 'Not publicly available')),
-        'AI Products/Services Offered': flatten(kyb_report.get('ai_products', 'Not publicly available')),
-        'Patent Details': flatten(kyb_report.get('patents', 'Not publicly available')),
-        'AI Research Papers Published': flatten(kyb_report.get('research_papers', 'Not publicly available')),
-        'Partnerships': flatten(kyb_report.get('partnerships', 'Not publicly available')),
-        'Tech Stack': flatten(kyb_report.get('tech_stack', 'Not publicly available')),
-        'Customer Base': flatten(kyb_report.get('customers', 'Not publicly available')),
-        'Case Studies': flatten(kyb_report.get('case_studies', 'Not publicly available')),
-        'Awards': flatten(kyb_report.get('awards', 'Not publicly available')),
-        'Compliance and Regulatory Adherence': flatten(kyb_report.get('compliance', 'Not publicly available')),
-        'Market Presence': flatten(kyb_report.get('market_presence', 'Not publicly available')),
-        'Community Engagement': flatten(kyb_report.get('community', 'Not publicly available')),
-        'AI Ethics Policies': flatten(kyb_report.get('ethics', 'Not publicly available')),
-        'Competitor Analysis': flatten(kyb_report.get('competitors', 'Not publicly available')),
-        'Recent Media Mentions': flatten(kyb_report.get('media', 'Not publicly available')),
+        'Registration Number': flatten(kyb_report.get('registration_number', 'Not publicly available')),
+        'Incorporation Date': flatten(kyb_report.get('incorporation_date', 'Not publicly available')),
+        'Beneficial Owners': flatten(kyb_report.get('beneficial_owners', [])),
+        'Financial Summary': flatten(kyb_report.get('financial_summary', 'Not publicly available')),
+        'Risk Indicators': flatten(kyb_report.get('risk_indicators', [])),
         'Company Description': flatten(enrichment_data.get('about_info', 'Not publicly available'))
     }
     
@@ -235,51 +226,56 @@ def process_and_update_database(company_name, company_website, kyb_report, enric
     
     user_df.to_csv(output_file, index=False)
 
-def display_report(kyb_report, enrichment_data):
+def display_report(kyb_report, enrichment_data, company_website):
     """Display the KYB report in a user-friendly format with tabs."""
     company_name = kyb_report.get('company_name', 'Unknown')
     st.header(f"KYB Report for {company_name}")
     
-    tab1, tab2, tab3 = st.tabs(["Company Overview", "AI Capabilities", "Business Details"])
+    tab1, tab2, tab3 = st.tabs(["Company Overview", "Beneficial Owners", "Risk Indicators"])
     
     with tab1:
         st.subheader("Basic Information")
         cols = st.columns(2)
         with cols[0]:
             st.write(f"**Company Name:** {company_name}")
-            st.write(f"**Website:** {kyb_report.get('website', 'Not provided')}")
-            st.write(f"**Industry:** {kyb_report.get('industry', 'Not publicly available')}")
-            st.write(f"**Headquarters:** {kyb_report.get('headquarters', 'Not publicly available')}")
+            st.write(f"**Website:** {company_website}")
+            st.write(f"**Registration Number:** {kyb_report.get('registration_number', 'Not publicly available')}")
         with cols[1]:
-            st.write(f"**Founded:** {kyb_report.get('founding_year', 'Not publicly available')}")
-            st.write(f"**Employees:** {kyb_report.get('employees', 'Not publicly available')}")
-            st.write(f"**Funding:** {kyb_report.get('funding', 'Not publicly available')}")
-            st.write(f"**Revenue:** {kyb_report.get('revenue', 'Not publicly available')}")
+            st.write(f"**Incorporation Date:** {kyb_report.get('incorporation_date', 'Not publicly available')}")
+        
+        st.subheader("Financial Summary")
+        financial_summary = kyb_report.get('financial_summary', 'Not publicly available')
+        if isinstance(financial_summary, dict):
+            for key, value in financial_summary.items():
+                st.write(f"**{key.replace('_', ' ').title()}:** {value}")
+        else:
+            st.write(financial_summary)
         
         st.subheader("Company Description")
         st.write(enrichment_data.get('about_info', 'Not publicly available'))
     
     with tab2:
-        st.subheader("AI Technology")
-        st.write(f"**AI Models:** {', '.join(kyb_report.get('ai_models', ['Not publicly available']))}")
-        st.write(f"**Primary Use Case:** {', '.join(kyb_report.get('ai_use_case', ['Not publicly available']))}")
-        st.write(f"**Frameworks:** {', '.join(kyb_report.get('ai_frameworks', ['Not publicly available']))}")
-        st.write(f"**Products/Services:** {', '.join(kyb_report.get('ai_products', ['Not publicly available']))}")
-        
-        st.subheader("Research & Development")
-        st.write(f"**Patents:** {kyb_report.get('patents', 'Not publicly available')}")
-        st.write(f"**Research Papers:** {', '.join(kyb_report.get('research_papers', ['Not publicly available']))}")
+        st.subheader("Beneficial Owners")
+        beneficial_owners = kyb_report.get('beneficial_owners', [])
+        if beneficial_owners:
+            for i, owner in enumerate(beneficial_owners, 1):
+                if isinstance(owner, dict):
+                    st.write(f"**{i}. {owner.get('name', 'Unknown')}**")
+                    st.write(f"Ownership Percentage: {owner.get('ownership_percentage', 'Unknown')}")
+                    st.write("---")
+                else:
+                    st.write(f"**{i}.** {owner}")
+        else:
+            st.write("No beneficial owners identified")
     
     with tab3:
-        st.subheader("Business Information")
-        st.write(f"**Partnerships:** {', '.join(kyb_report.get('partnerships', ['Not publicly available']))}")
-        st.write(f"**Customers:** {', '.join(kyb_report.get('customers', ['Not publicly available']))}")
-        st.write(f"**Case Studies:** {kyb_report.get('case_studies', 'Not publicly available')}")
-        st.write(f"**Market Presence:** {', '.join(kyb_report.get('market_presence', ['Not publicly available']))}")
-        
-        st.subheader("Compliance & Ethics")
-        st.write(f"**Regulatory Compliance:** {', '.join(kyb_report.get('compliance', ['Not publicly available']))}")
-        st.write(f"**AI Ethics:** {', '.join(kyb_report.get('ethics', ['Not publicly available']))}")
+        st.subheader("Risk Indicators")
+        risk_indicators = kyb_report.get('risk_indicators', [])
+        if risk_indicators:
+            for i, risk in enumerate(risk_indicators, 1):
+                st.write(f"{i}. {risk}")
+        else:
+            st.write("No risk indicators identified")
     
     full_data = {**kyb_report, "web_data": enrichment_data}
     st.download_button(
@@ -325,7 +321,7 @@ if run_button:
                 else:
                     enrichment_data = scrape_additional_data(company_name, company_website)
                     process_and_update_database(company_name, company_website, kyb_report, enrichment_data, core_df)
-                    display_report(kyb_report, enrichment_data)
+                    display_report(kyb_report, enrichment_data, company_website)
 
         except Exception as e:
             st.error(f"Error processing request: {e}")
