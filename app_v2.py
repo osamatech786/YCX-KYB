@@ -159,73 +159,50 @@ def process_company(company_name, company_website, api_key):
 with st.sidebar:
     st.header("Configuration")
     api_key = st.text_input("Enter your Groq API Key", type="password")
-    input_method = st.radio("Choose input method:", ["Single Company", "Batch Processing (CSV)"])
-    
-    if input_method == "Single Company":
-        company_name = st.text_input("Company Name", "Brain Corp")
-        company_website = st.text_input("Company Website", "https://www.braincorp.com")
-        run_button = st.button("Generate KYB Report", type="primary")
-    else:
-        st.write("Upload a CSV with 'Company Name' and optional 'Website'")
-        uploaded_file = st.file_uploader("Choose a CSV file", type="csv")
-        if uploaded_file:
-            csv_data = pd.read_csv(uploaded_file)
-            st.write("Preview of uploaded data:")
-            st.dataframe(csv_data.head())
-            if 'Company Name' not in csv_data.columns:
-                st.error("CSV must contain 'Company Name' column")
-                run_batch = False
-            else:
-                num_companies = st.slider("Number of companies to process", 1, len(csv_data), min(5, len(csv_data)))
-                run_batch = st.button("Process Companies", type="primary")
-        else:
-            run_batch = False
+    company_name = st.text_input("Company Name")
+    run_button = st.button("Generate KYB Report", type="primary")
 
 # Main app logic
-if input_method == "Single Company" and run_button:
+if run_button:
     if not api_key:
         st.error("Please enter your Groq API Key.")
     elif not company_name:
         st.error("Please enter a Company Name.")
     else:
-        with st.spinner(f"Processing {company_name}..."):
-            if not company_website:
-                company_website = find_company_website(company_name) or "https://example.com"
-            full_profile = process_company(company_name, company_website, api_key)
-            if "error" in full_profile:
-                st.error(full_profile["error"])
+        # Try to find company in database
+        try:
+            df = pd.read_csv("knowYourAi - Company Details.csv")
+            company_data = df[df['Company Name'].str.lower() == company_name.lower()]
+            
+            if len(company_data) > 0:
+                st.success(f"Found existing data for {company_name}")
+                company_website = company_data.iloc[0]['Website'].split(' [')[0]  # Remove source label if present
             else:
-                st.subheader("KYB Report")
-                st.json(full_profile)
-                st.download_button(
-                    label="Download Report (JSON)",
-                    data=json.dumps(full_profile, indent=2),
-                    file_name=f"{company_name.replace(' ', '_')}_kyb_report.json",
-                    mime="application/json"
-                )
+                st.info(f"Adding new company: {company_name}")
+                company_website = find_company_website(company_name)
+                if not company_website:
+                    st.error("Could not find company website. Please try again.")
+                    st.stop()
+                st.success(f"Found company website: {company_website}")
 
-elif input_method == "Batch Processing (CSV)" and run_batch:
-    if not api_key:
-        st.error("Please enter your Groq API Key.")
-    else:
-        progress_bar = st.progress(0)
-        results = []
-        for i, row in csv_data.head(num_companies).iterrows():
-            company_name = row["Company Name"]
-            company_website = row.get("Website") or find_company_website(company_name) or "https://example.com"
-            result = process_company(company_name, company_website, api_key)
-            results.append(result)
-            progress_bar.progress((i + 1) / num_companies)
-            time.sleep(1)  # Avoid rate limits
-        
-        st.subheader("Batch Results")
-        st.json(results)
-        st.download_button(
-            label="Download Full Results (JSON)",
-            data=json.dumps(results, indent=2),
-            file_name="kyb_batch_results.json",
-            mime="application/json"
-        )
+            with st.spinner(f"Processing {company_name}..."):
+                # Generate KYB report
+                kyb_report = generate_kyb_report(company_name, company_website, api_key)
+                
+                if not kyb_report:
+                    st.error("KYB report generation failed.")
+                else:
+                    # Scrape additional data
+                    enrichment_data = scrape_additional_data(company_name, company_website)
+                    
+                    # Process and update database
+                    process_and_update_database(company_name, company_website, kyb_report, enrichment_data, df)
+                    
+                    # Display report
+                    display_report(kyb_report, enrichment_data)
+
+        except Exception as e:
+            st.error(f"Error processing request: {e}")
 
 else:
-    st.info("Enter your Groq API key and company details, then click 'Generate KYB Report' or upload a CSV.")
+    st.info("Enter your Groq API key and company name, then click 'Generate KYB Report'.")
