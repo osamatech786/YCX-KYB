@@ -255,4 +255,162 @@ def search_news_for_risks(company_name):
     
     return {
         "news_search_performed": True,
-        "note": "This is a placeholder for news risk analysis. In production, connect to a news AP...
+        "note": "This is a placeholder for news risk analysis. In production, connect to a news API."
+    }
+
+# Main app logic
+if run_button:
+    if not api_key:
+        st.error("Please enter your Groq API Key in the sidebar.")
+    elif not company_name:
+        st.error("Please enter a Company Name in the sidebar.")
+    elif not company_website:
+        st.error("Please enter a Company Website in the sidebar.")
+    else:
+        # Generate KYB report
+        kyb_report = generate_kyb_report(company_name, company_website, api_key, custom_prompt)
+        
+        if not kyb_report:
+            st.error("KYB report generation failed.")
+        else:
+            # Scrape additional data
+            enrichment_data = scrape_additional_data(company_name, company_website)
+            
+            # Search for news
+            news_data = search_news_for_risks(company_name)
+            
+            # Merge the datasets for a complete KYB profile
+            full_profile = {**kyb_report, "web_data": enrichment_data, "news_data": news_data}
+            
+            # Enhance beneficial owners with leadership info if beneficial owners is empty
+            if not kyb_report.get('beneficial_owners') or len(kyb_report.get('beneficial_owners', [])) == 0:
+                if enrichment_data.get('leadership_info') and enrichment_data['leadership_info'] != "Not found on website":
+                    full_profile['beneficial_owners'] = [
+                        {"name": leader["name"], "ownership_percentage": "Unknown", "title": leader["title"]}
+                        for leader in enrichment_data['leadership_info']
+                    ]
+            
+            # Enhance risk indicators with potential risks from website
+            if enrichment_data.get('potential_risks') and enrichment_data['potential_risks'] != "None detected on website":
+                if not full_profile.get('risk_indicators') or len(full_profile.get('risk_indicators', [])) == 0:
+                    full_profile['risk_indicators'] = enrichment_data['potential_risks']
+                else:
+                    full_profile['risk_indicators'].extend(enrichment_data['potential_risks'])
+            
+            # Display results in tabs
+            tab1, tab2, tab3, tab4 = st.tabs(["Company Overview", "Beneficial Owners", "Risk Indicators", "Raw Data"])
+            
+            with tab1:
+                st.header("Company Overview")
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    st.subheader("Basic Information")
+                    st.write(f"**Company Name:** {full_profile.get('company_name', 'N/A')}")
+                    st.write(f"**Registration Number:** {full_profile.get('registration_number', 'Not publicly available')}")
+                    st.write(f"**Incorporation Date:** {full_profile.get('incorporation_date', 'Not publicly available')}")
+                
+                with col2:
+                    st.subheader("Financial Summary")
+                    financial_summary = full_profile.get('financial_summary', {})
+                    if isinstance(financial_summary, dict) and financial_summary:
+                        for key, value in financial_summary.items():
+                            st.write(f"**{key.replace('_', ' ').title()}:** {value}")
+                    else:
+                        st.write("No financial information available")
+                
+                st.subheader("About")
+                st.write(enrichment_data.get('about_info', 'No information available'))
+                
+                st.subheader("Contact Information")
+                contact_info = enrichment_data.get('contact_info', {})
+                if isinstance(contact_info, dict) and contact_info:
+                    for key, value in contact_info.items():
+                        st.write(f"**{key.title()}:** {value}")
+                else:
+                    st.write("No contact information available")
+                
+                st.subheader("Social Media")
+                social_media = enrichment_data.get('social_media', {})
+                if isinstance(social_media, dict) and social_media:
+                    for platform, url in social_media.items():
+                        st.write(f"**{platform.title()}:** [{url}]({url})")
+                else:
+                    st.write("No social media information available")
+            
+            with tab2:
+                st.header("Beneficial Owners")
+                beneficial_owners = full_profile.get('beneficial_owners', [])
+                
+                if beneficial_owners and isinstance(beneficial_owners, list):
+                    # Convert to DataFrame for better display
+                    owners_data = []
+                    for owner in beneficial_owners:
+                        if isinstance(owner, dict):
+                            owners_data.append({
+                                "Name": owner.get("name", "N/A"),
+                                "Ownership %": owner.get("ownership_percentage", "Unknown"),
+                                "Title": owner.get("title", "N/A")
+                            })
+                    
+                    if owners_data:
+                        st.dataframe(pd.DataFrame(owners_data), use_container_width=True)
+                    else:
+                        st.write("No beneficial owners information available")
+                else:
+                    st.write("No beneficial owners information available")
+            
+            with tab3:
+                st.header("Risk Indicators")
+                risk_indicators = full_profile.get('risk_indicators', [])
+                
+                if risk_indicators and isinstance(risk_indicators, list):
+                    for i, risk in enumerate(risk_indicators):
+                        st.write(f"{i+1}. {risk}")
+                else:
+                    st.write("No risk indicators identified")
+            
+            with tab4:
+                st.header("Raw Data")
+                st.json(full_profile)
+                
+                # Option to download the report
+                report_json = json.dumps(full_profile, indent=2)
+                st.download_button(
+                    label="Download Full Report (JSON)",
+                    data=report_json,
+                    file_name=f"{company_name.replace(' ', '_')}_kyb_report.json",
+                    mime="application/json"
+                )
+else:
+    st.info("Enter your Groq API key, company name, and website in the sidebar, then click 'Generate KYB Report'.")
+    
+    # Show example report structure
+    with st.expander("Example Report Structure"):
+        st.code("""
+{
+  "company_name": "Example Corp",
+  "registration_number": "12345678",
+  "incorporation_date": "2010-01-15",
+  "beneficial_owners": [
+    {"name": "Jane Doe", "ownership_percentage": "51%"},
+    {"name": "John Smith", "ownership_percentage": "49%"}
+  ],
+  "financial_summary": {
+    "revenue": "$10M (2022)",
+    "funding": "Series B, $25M (2021)"
+  },
+  "risk_indicators": [
+    "Regulatory investigation in 2021",
+    "Lawsuit from competitor in 2022"
+  ],
+  "web_data": {
+    "about_info": "Company description...",
+    "leadership_info": [...],
+    "contact_info": {...},
+    "social_media": {...},
+    "potential_risks": [...]
+  },
+  "news_data": {...}
+}
+        """, language="json")
