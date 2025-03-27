@@ -63,7 +63,6 @@ with st.sidebar:
         try:
             client = Groq(api_key=api_key)
             models_response = client.models.list()
-            available_models = [model.id for model in models_response[0][1]]
             
             # Create a clean display name mapping
             display_names = {
@@ -76,20 +75,28 @@ with st.sidebar:
                 "deepseek-r1-distill-llama-70b": "DeepSeek R1 Distill LLaMA 70B"
             }
 
-            # Update model_options with only available models
-            model_options = {
-                display_names.get(model_id, model_id): model_id 
-                for model_id in available_models 
-                if not model_id.startswith(("whisper", "playai"))  # Filter out non-chat models
-            }
-
-            # Display available models in a clean format
+            # Filter and create model_options dictionary
+            model_options = {}
             st.write("Available Chat Models:")
-            for display_name, model_id in model_options.items():
-                st.write(f"- {display_name}")
+            for model in models_response:
+                model_id = model.id
+                if not model_id.startswith(("whisper", "playai")):  # Filter out non-chat models
+                    display_name = display_names.get(model_id, model_id)
+                    model_options[display_name] = model_id
+                    st.write(f"- {display_name}")
 
         except Exception as e:
             st.error(f"Failed to list models: {str(e)}")
+            st.write("Using default model list:")
+            # Fallback model options
+            model_options = {
+                "LLaMA 3 70B": "llama3-70b-8192",
+                "LLaMA 3 8B": "llama3-8b-8192",
+                "LLaMA 3.3 70B Versatile": "llama-3.3-70b-versatile",
+                "Mistral Saba 24B": "mistral-saba-24b"
+            }
+            for name in model_options.keys():
+                st.write(f"- {name}")
     
     company_name = st.text_input("Company Name (Optional)", help="Enter for single company report.")
     company_website = st.text_input("Company Website (Optional)", help="Optional for single company report.")
