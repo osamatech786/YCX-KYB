@@ -47,27 +47,15 @@ input_choice = st.radio(
 with st.sidebar:
     st.header("Configuration")
     
-    # Updated model_options with all possible Groq LLMs
+    # Updated model_options with correct Groq model names
     model_options = {
-        "LLaMA 3 70B": "llama3-70b",
-        "LLaMA 3 8B": "llama3-8b",
-        "LLaMA 3.1 405B": "llama-3.1-405b",
-        "LLaMA 3.1 70B": "llama-3.1-70b",
-        "LLaMA 3.1 8B": "llama-3.1-8b",
-        "LLaMA 2 70B": "llama2-70b",
-        "Mistral 7B": "mistral-7b",
-        "Mixtral 8x22B": "mixtral-8x22b",
-        "Mistral Large 2": "mistral-large2",
-        "Mistral Saba 24B": "mistral-saba-24b",
-        "Gemma 7B": "gemma-7b",  # Assuming 7B as a common variant; adjust if specific
-        "Qwen QwQ-32B": "qwen-qwq-32b",
-        "DeepSeek R1": "deepseek-r1",  # Placeholder; specific variant may vary
-        "LLaMA 3 Groq Tool-Use 70B": "llama-3-grok-tool-use-70b",
-        "LLaMA 3 Groq Tool-Use 8B": "llama-3-grok-tool-use-8b",
-        "LLaMA 3.3 70B Versatile": "llama-3.3-70b-versatile",
-        "LLaMA 3.1 8B Instant": "llama-3.1-8b-instant",
-        "LLaMA3 70B 8192": "llama3-70b-8192",
-        "LLaMA3 8B 8192": "llama3-8b-8192",
+        "Mixtral 8x7B": "mixtral-8x7b-32768",
+        "LLaMA2 70B": "llama2-70b-4096",
+        "Gemma 7B": "gemma-7b-it",
+        "Claude 3 Opus": "claude-3-opus-20240229",
+        "Claude 3 Sonnet": "claude-3-sonnet-20240229",
+        "Claude 2.1": "claude-2.1",
+        "Claude 2.0": "claude-2.0",
     }
     selected_model = st.selectbox("Select AI Model", list(model_options.keys()))
     
@@ -328,6 +316,16 @@ def display_report(report_data):
     # Raw JSON
     with st.expander("View Raw JSON"):
         st.json(report_data)
+
+def list_available_models(api_key):
+    """List all available models for the given API key"""
+    client = Groq(api_key=api_key)
+    try:
+        models = client.models.list()
+        return [model.id for model in models]
+    except Exception as e:
+        st.error(f"Failed to list models: {str(e)}")
+        return []
 
 # Admin View logic
 if input_choice == "Admin View":
