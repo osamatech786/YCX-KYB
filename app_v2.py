@@ -229,33 +229,63 @@ def load_core_dataset():
 def process_prompt(prompt, core_df, api_key, model):
     """Process custom prompt using Groq API if core dataset is unavailable."""
     client = Groq(api_key=api_key)
-    system_prompt = "You are a business analyst. Provide a list of companies based on the prompt in JSON format with keys: company_name, website, and any relevant details."
+    system_prompt = (
+        "You are a business analyst. Provide a list of companies based on the user's prompt. "
+        "Format your response as a valid JSON array of objects, where each object has these fields: "
+        "company_name, website, and any relevant details. Ensure proper JSON formatting."
+    )
+    
     messages = [
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": prompt}
     ]
     
     try:
-        with st.spinner(f"Processing prompt using {model}..."):
+        with st.spinner(f"Processing prompt using {selected_model}..."):
             response = client.chat.completions.create(
                 messages=messages,
                 model=model,
-                temperature=0.3,
+                temperature=0.1,  # Lower temperature for more consistent formatting
                 max_tokens=1024
             )
-        output_text = response.choices[0].message.content
-        json_match = re.search(r'```json\s*(.*?)\s*```', output_text, re.DOTALL) or re.search(r'({.*})', output_text, re.DOTALL)
-        if json_match:
-            output_text = json_match.group(1)
-        result = json.loads(output_text)
-        if isinstance(result, list):
-            return pd.DataFrame(result)
-        elif isinstance(result, dict) and "companies" in result:
-            return pd.DataFrame(result["companies"])
-        st.warning("API response not in expected list format.")
-        return pd.DataFrame([result])
+            
+        output_text = response.choices[0].message.content.strip()
+        
+        # Clean up the response text
+        if output_text.startswith("```json"):
+            output_text = output_text.replace("```json", "").replace("```", "")
+        
+        # Try to fix common JSON formatting issues
+        output_text = output_text.replace("'", '"')  # Replace single quotes with double quotes
+        output_text = re.sub(r',\s*}', '}', output_text)  # Remove trailing commas
+        output_text = re.sub(r',\s*]', ']', output_text)  # Remove trailing commas in arrays
+        
+        try:
+            result = json.loads(output_text)
+            
+            # Handle different response formats
+            if isinstance(result, list):
+                return pd.DataFrame(result)
+            elif isinstance(result, dict):
+                if "companies" in result:
+                    return pd.DataFrame(result["companies"])
+                else:
+                    return pd.DataFrame([result])
+            else:
+                st.error("Unexpected response format")
+                st.code(output_text)  # Show the raw response for debugging
+                return None
+                
+        except json.JSONDecodeError as e:
+            st.error(f"JSON parsing error: {str(e)}")
+            st.text("Raw response:")
+            st.code(output_text)
+            return None
+            
     except Exception as e:
         st.error(f"Failed to process prompt with API: {str(e)}")
+        st.text("Full error:")
+        st.code(str(e))
         return None
 
 def display_report(report_data):
@@ -399,24 +429,12 @@ elif input_choice == "Write Custom Prompt" and run_button:
     elif not custom_prompt:
         st.error("Please enter your prompt.")
     else:
-        try:
-            core_df = load_core_dataset()
-            with st.spinner("Processing your prompt..."):
-                result_df = process_prompt(custom_prompt, core_df, api_key, model_options[selected_model])
-                if result_df is not None:
-                    # Update usage log
-                    update_user_output(
-                        api_key=api_key,
-                        input_type="custom_prompt",
-                        input_text=custom_prompt,
-                        timestamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                    )
-                    st.subheader("Prompt Results")
-                    st.dataframe(result_df, use_container_width=True)
-                else:
-                    st.warning("No results from prompt.")
-        except Exception as e:
-            st.error(f"Error: {e}")
+        result_df = process_prompt(custom_prompt, None, api_key, model_options[selected_model])
+        if result_df is not None and not result_df.empty:
+            st.success("Results found!")
+            st.dataframe(result_df, use_container_width=True)
+        else:
+            st.warning("No results from prompt.")
 
 else:
     if not st.session_state.admin_logged_in:
