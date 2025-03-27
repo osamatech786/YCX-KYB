@@ -46,7 +46,7 @@ with st.sidebar:
     
     company_name = st.text_input("Company Name (Optional)", help="Enter for single company report.")
     company_website = st.text_input("Company Website (Optional)", help="Optional for single company report.")
-    custom_prompt = st.text_area("Special Instructions (Optional)", help="E.g., 'All companies from core dataset with revenue over 1M USD'")
+    custom_prompt = st.text_area("Special Instructions (Optional)", help="E.g., 'Look for companies whose name starts with M'")
     
     run_button = st.button("Generate Report", type="primary")
     admin_login_button = st.button("Admin Login")
@@ -86,10 +86,13 @@ def generate_kyb_report(company_name, company_website, api_key, model, u_user_pr
             output_text = json_match.group(1)
         kyb_report = json.loads(output_text)
         
-        if isinstance(kyb_report.get('beneficial_owners'), str):
-            kyb_report['beneficial_owners'] = [] if kyb_report['beneficial_owners'] == "Not publicly available" else [{"name": kyb_report['beneficial_owners'], "ownership_percentage": "Unknown"}]
-        if isinstance(kyb_report.get('risk_indicators'), str):
-            kyb_report['risk_indicators'] = [] if kyb_report['risk_indicators'] == "Not publicly available" else [kyb_report['risk_indicators']]
+        # Normalize data
+        if not isinstance(kyb_report.get('beneficial_owners', []), list):
+            kyb_report['beneficial_owners'] = [] if kyb_report.get('beneficial_owners') == "Not publicly available" else [{"name": str(kyb_report.get('beneficial_owners', 'Unknown')), "ownership_percentage": "Unknown"}]
+        if not isinstance(kyb_report.get('risk_indicators', []), list):
+            kyb_report['risk_indicators'] = [] if kyb_report.get('risk_indicators') == "Not publicly available" else [str(kyb_report.get('risk_indicators', ''))]
+        if not isinstance(kyb_report.get('financial_summary'), dict):
+            kyb_report['financial_summary'] = {"details": str(kyb_report.get('financial_summary', 'Not publicly available'))}
         
         return kyb_report
     except Exception as e:
@@ -156,7 +159,7 @@ def update_user_output(company_name, company_website, kyb_report, enrichment_dat
             "Registration Number": kyb_report.get("registration_number", "Not publicly available"),
             "Incorporation Date": kyb_report.get("incorporation_date", "Not publicly available"),
             "Beneficial Owners": ", ".join(f"{o.get('name', 'Unknown')} ({o.get('ownership_percentage', 'Unknown')})" for o in kyb_report.get("beneficial_owners", [])) or "None",
-            "Financial Summary": json.dumps(kyb_report.get("financial_summary", "Not publicly available")),
+            "Financial Summary": json.dumps(kyb_report.get("financial_summary", {"details": "Not publicly available"})),
             "Risk Indicators": ", ".join(kyb_report.get("risk_indicators", [])) or "None",
             "About Info": enrichment_data.get("about_info", "N/A")
         }
@@ -180,57 +183,42 @@ def load_core_dataset():
         if os.path.exists(core_file):
             st.session_state.core_df = pd.read_csv(core_file)
             return st.session_state.core_df
-        else:
-            st.warning(f"Core dataset '{core_file}' not found. Prompt-based queries will not work.")
-            return None
+        return None
     except Exception as e:
         st.error(f"Failed to load core dataset: {str(e)}")
         return None
 
 def process_prompt(prompt, core_df, api_key, model):
     """Process custom prompt using Groq API if core dataset is unavailable."""
-    if core_df is not None:
-        try:
-            if "revenue" in prompt.lower() and "1" in prompt.lower():
-                # Assuming a 'Revenue' column exists; adjust as per your dataset
-                if "Revenue" in core_df.columns:
-                    filtered_df = core_df[core_df["Revenue"].astype(str).str.replace('[^\d.]', '', regex=True).astype(float) > 1000000]
-                    return filtered_df[["Company Name", "Website", "Revenue"]]
-                else:
-                    st.warning("Revenue column not found in core dataset.")
-            else:
-                st.warning("Prompt not recognized. Example: 'All companies from core dataset with revenue over 1M USD'")
-            return None
-        except Exception as e:
-            st.error(f"Failed to process prompt against core dataset: {str(e)}")
-            return None
-    else:
-        # Fallback to Groq API if no core dataset
-        client = Groq(api_key=api_key)
-        system_prompt = "You are a business analyst. Provide a list of companies based on the prompt in JSON format."
-        messages = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": prompt}
-        ]
-        try:
-            with st.spinner(f"Processing prompt using {selected_model}..."):
-                response = client.chat.completions.create(
-                    messages=messages,
-                    model=model,
-                    temperature=0.3,
-                    max_tokens=1024
-                )
-            output_text = response.choices[0].message.content
-            json_match = re.search(r'```json\s*(.*?)\s*```', output_text, re.DOTALL) or re.search(r'({.*})', output_text, re.DOTALL)
-            if json_match:
-                output_text = json_match.group(1)
-            result = json.loads(output_text)
-            if isinstance(result, list):
-                return pd.DataFrame(result)
-            return None
-        except Exception as e:
-            st.error(f"Failed to process prompt with API: {str(e)}")
-            return None
+    client = Groq(api_key=api_key)
+    system_prompt = "You are a business analyst. Provide a list of companies based on the prompt in JSON format with keys: company_name, website, and any relevant details."
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": prompt}
+    ]
+    
+    try:
+        with st.spinner(f"Processing prompt using {selected_model}..."):
+            response = client.chat.completions.create(
+                messages=messages,
+                model=model,
+                temperature=0.3,
+                max_tokens=1024
+            )
+        output_text = response.choices[0].message.content
+        json_match = re.search(r'```json\s*(.*?)\s*```', output_text, re.DOTALL) or re.search(r'({.*})', output_text, re.DOTALL)
+        if json_match:
+            output_text = json_match.group(1)
+        result = json.loads(output_text)
+        if isinstance(result, list):
+            return pd.DataFrame(result)
+        elif isinstance(result, dict) and "companies" in result:
+            return pd.DataFrame(result["companies"])
+        st.warning("API response not in expected list format.")
+        return pd.DataFrame([result])
+    except Exception as e:
+        st.error(f"Failed to process prompt with API: {str(e)}")
+        return None
 
 # Admin login
 if admin_login_button:
@@ -286,7 +274,7 @@ if st.session_state.admin_logged_in:
     
     if st.button("Logout"):
         st.session_state.admin_logged_in = False
-        st.success("Logged out.")
+        st.rerun()  # Force rerun to refresh UI
 
 elif run_button:
     if not api_key:
@@ -352,6 +340,7 @@ elif run_button:
                 st.subheader("Dashboard - Prompt Results")
                 st.dataframe(result_df, use_container_width=True)
             else:
-                st.warning("No results from prompt.")
+                st.warning("No results from prompt. Ensure the prompt is clear (e.g., 'Look for companies whose name starts with M').")
 else:
-    st.info("Enter your Groq API key and either a company name or special instructions, then click 'Generate Report'.")
+    if not st.session_state.admin_logged_in:
+        st.info("Enter your Groq API key and either a company name or special instructions, then click 'Generate Report'.")
