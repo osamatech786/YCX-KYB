@@ -47,20 +47,26 @@ input_choice = st.radio(
 with st.sidebar:
     st.header("Configuration")
     
-    # Updated model_options with correct Groq model names
+    # Updated model_options with currently supported Groq models
     model_options = {
-        "Mixtral 8x7B": "mixtral-8x7b-32768",
-        "LLaMA2 70B": "llama2-70b-4096",
-        "Gemma 7B": "gemma-7b-it",
-        "Claude 3 Opus": "claude-3-opus-20240229",
-        "Claude 3 Sonnet": "claude-3-sonnet-20240229",
-        "Claude 2.1": "claude-2.1",
-        "Claude 2.0": "claude-2.0",
+        "Mixtral 8x7B": "mixtral-8x7b",
+        "LLaMA2 70B": "llama2-70b",
+        "Gemma 7B": "gemma-7b",
     }
     selected_model = st.selectbox("Select AI Model", list(model_options.keys()))
     
     api_key = st.text_input("Enter your Groq API Key", type="password")
     st.markdown("[Generate Groq API Key](https://console.groq.com/keys)")
+    
+    if api_key:
+        try:
+            client = Groq(api_key=api_key)
+            models = client.models.list()
+            st.write("Available models:")
+            for model in models:
+                st.write(f"- {model.id}")
+        except Exception as e:
+            st.error(f"Failed to list models: {str(e)}")
     
     company_name = st.text_input("Company Name (Optional)", help="Enter for single company report.")
     company_website = st.text_input("Company Website (Optional)", help="Optional for single company report.")
