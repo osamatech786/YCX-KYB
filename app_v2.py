@@ -216,6 +216,47 @@ def process_prompt(prompt, core_df, api_key, model):
         st.error(f"Failed to process prompt with API: {str(e)}")
         return None
 
+def display_report(report_data):
+    """Display the KYB report in a structured format"""
+    st.header("KYB Report")
+    
+    # Basic Information
+    st.subheader("Basic Information")
+    col1, col2 = st.columns(2)
+    with col1:
+        st.write(f"**Company Name:** {report_data.get('company_name', 'N/A')}")
+        st.write(f"**Registration Number:** {report_data.get('registration_number', 'N/A')}")
+    with col2:
+        st.write(f"**Incorporation Date:** {report_data.get('incorporation_date', 'N/A')}")
+    
+    # Financial Summary
+    st.subheader("Financial Summary")
+    financial_summary = report_data.get('financial_summary', {})
+    if isinstance(financial_summary, dict):
+        for key, value in financial_summary.items():
+            st.write(f"**{key.replace('_', ' ').title()}:** {value}")
+    
+    # Beneficial Owners
+    st.subheader("Beneficial Owners")
+    beneficial_owners = report_data.get('beneficial_owners', [])
+    if beneficial_owners:
+        for owner in beneficial_owners:
+            if isinstance(owner, dict):
+                st.write(f"- **{owner.get('name', 'Unknown')}** ({owner.get('ownership_percentage', 'Unknown')})")
+            else:
+                st.write(f"- {owner}")
+    
+    # Risk Indicators
+    st.subheader("Risk Indicators")
+    risk_indicators = report_data.get('risk_indicators', [])
+    if risk_indicators:
+        for risk in risk_indicators:
+            st.write(f"- {risk}")
+    
+    # Raw JSON
+    with st.expander("View Raw JSON"):
+        st.json(report_data)
+
 # Admin login
 if admin_login_button:
     with st.form("admin_login"):
@@ -284,8 +325,13 @@ elif input_choice == "Enter Company Name":
             
             # Process company
             with st.spinner(f"Processing {company_name}..."):
-                # Your existing processing code here...
-                kyb_report = generate_kyb_report(company_name, company_website, api_key)
+                # Pass the selected model from sidebar
+                kyb_report = generate_kyb_report(
+                    company_name=company_name,
+                    company_website=company_website,
+                    api_key=api_key,
+                    model=model_options[selected_model]  # Add this parameter
+                )
                 if kyb_report:
                     # Save report
                     save_report(company_name, kyb_report)
@@ -308,9 +354,19 @@ elif input_choice == "Write Custom Prompt":
         st.error("Please enter your prompt.")
     else:
         try:
-            # Process custom prompt
+            # Process custom prompt using Groq API directly
+            client = Groq(api_key=api_key)
+            
             with st.spinner("Processing your prompt..."):
-                response = generate_custom_response(api_key, custom_prompt)
+                response = client.chat.completions.create(
+                    messages=[
+                        {"role": "user", "content": custom_prompt}
+                    ],
+                    model=model_options[selected_model],
+                    temperature=0.3,
+                    max_tokens=1024
+                )
+                
                 if response:
                     # Update usage log
                     update_user_output(
@@ -320,14 +376,15 @@ elif input_choice == "Write Custom Prompt":
                         timestamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                     )
                     # Display response
-                    st.write(response)
+                    st.write("Response:")
+                    st.write(response.choices[0].message.content)
         except Exception as e:
             st.error(f"Error: {e}")
 
 else:  # Admin View
     # Add authentication for admin view
     admin_password = st.text_input("Enter admin password", type="password")
-    if admin_password == "your_admin_password":  # Replace with secure authentication
+    if admin_password == "ycxadmin":  # Replace with secure authentication
         st.header("Admin Dashboard")
         
         # Display user output log
