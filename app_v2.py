@@ -63,7 +63,6 @@ with st.sidebar:
     custom_prompt = st.text_area("Special Instructions (Optional)", help="E.g., 'Look for companies whose name starts with M'")
     
     run_button = st.button("Generate Report", type="primary")
-    admin_login_button = st.button("Admin Login")
 
 # Function definitions
 def generate_kyb_report(company_name, company_website, api_key, model):
@@ -285,8 +284,8 @@ def display_report(report_data):
     with st.expander("View Raw JSON"):
         st.json(report_data)
 
-# Admin login
-if admin_login_button:
+# Remove the admin_login_button check and keep only the Admin View section
+if input_choice == "Admin View":
     with st.form("admin_login"):
         st.subheader("Admin Login")
         username = st.text_input("Username")
@@ -413,31 +412,3 @@ elif input_choice == "Write Custom Prompt":
                     st.write(response.choices[0].message.content)
         except Exception as e:
             st.error(f"Error: {e}")
-
-else:  # Admin View
-    # Add authentication for admin view
-    admin_password = st.text_input("Enter admin password", type="password")
-    if admin_password == "ycxadmin":  # Replace with secure authentication
-        st.header("Admin Dashboard")
-        
-        # Display user output log
-        if os.path.exists(USER_OUTPUT_PATH):
-            st.subheader("Usage Log")
-            usage_df = pd.read_csv(USER_OUTPUT_PATH)
-            st.dataframe(
-                usage_df,
-                height=600,
-                use_container_width=True,
-                hide_index=True
-            )
-        
-        # Display generated reports
-        st.subheader("Generated Reports")
-        for filename in os.listdir(REPORTS_DIR):
-            if filename.endswith('.json'):
-                with open(os.path.join(REPORTS_DIR, filename), 'r') as f:
-                    report_data = json.load(f)
-                    with st.expander(f"Report: {filename}"):
-                        st.json(report_data)
-    else:
-        st.error("Please enter valid admin credentials to view this section.")
