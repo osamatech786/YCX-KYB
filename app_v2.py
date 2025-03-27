@@ -43,60 +43,22 @@ input_choice = st.radio(
     ["Enter Company Name", "Write Custom Prompt", "Admin View"]
 )
 
+# Simplified model_options with only the confirmed working models
+model_options = {
+    "LLaMA 3 70B": "llama3-70b-8192",
+    "LLaMA 3 8B": "llama3-8b-8192",
+    "LLaMA 3.3 70B Versatile": "llama-3.3-70b-versatile",
+    "Mistral Saba 24B": "mistral-saba-24b"
+}
+
 # Sidebar for inputs
 with st.sidebar:
     st.header("Configuration")
     
-    # Updated model_options with currently supported Groq models
-    model_options = {
-        "Mixtral 8x7B": "mixtral-8x7b-32768",
-        "Gemma 7B": "gemma-7b",
-        "Claude 3 Sonnet": "claude-3-sonnet",
-        "Claude 3 Opus": "claude-3-opus",
-    }
     selected_model = st.selectbox("Select AI Model", list(model_options.keys()))
     
     api_key = st.text_input("Enter your Groq API Key", type="password")
     st.markdown("[Generate Groq API Key](https://console.groq.com/keys)")
-    
-    if api_key:
-        try:
-            client = Groq(api_key=api_key)
-            models_response = client.models.list()
-            
-            # Create a clean display name mapping
-            display_names = {
-                "llama3-70b-8192": "LLaMA 3 70B",
-                "llama3-8b-8192": "LLaMA 3 8B",
-                "llama-3.3-70b-versatile": "LLaMA 3.3 70B Versatile",
-                "qwen-qwq-32b": "Qwen QWQ 32B",
-                "mistral-saba-24b": "Mistral Saba 24B",
-                "gemma2-9b-it": "Gemma 2 9B",
-                "deepseek-r1-distill-llama-70b": "DeepSeek R1 Distill LLaMA 70B"
-            }
-
-            # Filter and create model_options dictionary
-            model_options = {}
-            st.write("Available Chat Models:")
-            for model in models_response:
-                model_id = model.id
-                if not model_id.startswith(("whisper", "playai")):  # Filter out non-chat models
-                    display_name = display_names.get(model_id, model_id)
-                    model_options[display_name] = model_id
-                    st.write(f"- {display_name}")
-
-        except Exception as e:
-            st.error(f"Failed to list models: {str(e)}")
-            st.write("Using default model list:")
-            # Fallback model options
-            model_options = {
-                "LLaMA 3 70B": "llama3-70b-8192",
-                "LLaMA 3 8B": "llama3-8b-8192",
-                "LLaMA 3.3 70B Versatile": "llama-3.3-70b-versatile",
-                "Mistral Saba 24B": "mistral-saba-24b"
-            }
-            for name in model_options.keys():
-                st.write(f"- {name}")
     
     company_name = st.text_input("Company Name (Optional)", help="Enter for single company report.")
     company_website = st.text_input("Company Website (Optional)", help="Optional for single company report.")
@@ -352,16 +314,6 @@ def display_report(report_data):
     # Raw JSON
     with st.expander("View Raw JSON"):
         st.json(report_data)
-
-def list_available_models(api_key):
-    """List all available models for the given API key"""
-    client = Groq(api_key=api_key)
-    try:
-        models = client.models.list()
-        return [model for model in models]
-    except Exception as e:
-        st.error(f"Failed to list models: {str(e)}")
-        return []
 
 # Admin View logic
 if input_choice == "Admin View":
