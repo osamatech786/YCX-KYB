@@ -7,6 +7,7 @@ import streamlit as st
 from groq import Groq
 import pandas as pd
 from datetime import datetime
+import glob
 
 # Set page config
 st.set_page_config(
@@ -22,26 +23,47 @@ This application helps you perform KYB due diligence by gathering information ab
 from various sources and presenting it in a structured format.
 """)
 
+# Admin login state
+if 'admin_logged_in' not in st.session_state:
+    st.session_state.admin_logged_in = False
+
 # Sidebar for inputs
 with st.sidebar:
     st.header("Configuration")
     
-    # Model selection
+    # Model selection with all Groq models
     model_options = {
-        "Groq - LLaMA 3.3 70B": "llama-3.3-70b-versatile",
-        "Groq - Mixtral 8x7B": "mixtral-8x7b-32768",
-        # Add more free models here when APIs are integrated (e.g., DeepSeek)
+        "Distil-Whisper Large V3 (English)": "distil-whisper-large-v3-en",
+        "Gemma2 9B IT": "gemma2-9b-it",
+        "LLaMA 3.3 70B Versatile": "llama-3.3-70b-versatile",
+        "LLaMA 3.1 8B Instant": "llama-3.1-8b-instant",
+        "LLaMA Guard 3 8B": "llama-guard-3-8b",
+        "LLaMA3 70B 8192": "llama3-70b-8192",
+        "LLaMA3 8B 8192": "llama3-8b-8192",
+        "Whisper Large V3": "whisper-large-v3",
+        "Whisper Large V3 Turbo": "whisper-large-v3-turbo",
+        # Preview Models
+        "PlayAI TTS": "playai-tts",
+        "PlayAI TTS Arabic": "playai-tts-arabic",
+        "Qwen QWQ 32B": "qwen-qwq-32b",
+        "Mistral Saba 24B": "mistral-saba-24b",
+        "Qwen 2.5 Coder 32B": "qwen-2.5-coder-32b",
+        "Qwen 2.5 32B": "qwen-2.5-32b",
+        "DeepSeek R1 Distill Qwen 32B": "deepseek-r1-distill-qwen-32b",
+        "DeepSeek R1 Distill LLaMA 70B": "deepseek-r1-distill-llama-70b",
+        "LLaMA 3.3 70B SpecDec": "llama-3.3-70b-specdec",
+        "LLaMA 3.2 1B Preview": "llama-3.2-1b-preview",
+        "LLaMA 3.2 3B Preview": "llama-3.2-3b-preview",
+        "LLaMA 3.2 11B Vision Preview": "llama-3.2-11b-vision-preview",
+        "LLaMA 3.2 90B Vision Preview": "llama-3.2-90b-vision-preview"
     }
-    selected_model = st.selectbox("Select AI Model", list(model_options.keys()), help="Choose the model to generate the report.")
+    selected_model = st.selectbox("Select AI Model", list(model_options.keys()), help="Choose the model to generate the report. Preview models are for evaluation only.")
     
     # API key input
-    api_key = st.text_input("Enter your API Key", type="password")
+    api_key = st.text_input("Enter your Groq API Key", type="password")
     
-    # API key signup links
-    st.markdown("Need an API key?")
-    st.markdown("[Sign up for Groq](https://console.groq.com/keys) | [Generate Groq API Key](https://console.groq.com/keys)")
-    # Placeholder for other models
-    st.markdown("*More model API links coming soon (DeepSeek, etc.)*")
+    # API key signup link
+    st.markdown("[Generate Groq API Key](https://console.groq.com/keys)")
     
     # Company inputs (optional)
     company_name = st.text_input("Company Name (Optional)", "Brain Corp", help="Leave blank if using prompt only.")
@@ -58,11 +80,16 @@ with st.sidebar:
     edit_mode = st.checkbox("Enable Edit Mode", help="Manually correct report data")
     
     run_button = st.button("Generate KYB Report", type="primary")
+    
+    # Admin login button
+    st.markdown("---")
+    st.subheader("Admin Access")
+    admin_login_button = st.button("Admin Login")
 
 # Function definitions
 def generate_kyb_report(company_name, company_website, api_key, model, u_user_prompt=None):
-    """Uses selected AI model to generate a KYB report."""
-    client = Groq(api_key=api_key)  # Currently only Groq; extend for other APIs later
+    """Uses selected Groq model to generate a KYB report."""
+    client = Groq(api_key=api_key)
     
     system_prompt = (
         "You are a seasoned business analyst with expertise in KYB due diligence. "
@@ -75,7 +102,6 @@ def generate_kyb_report(company_name, company_website, api_key, model, u_user_pr
         "Ensure the response is properly formatted JSON that can be parsed by json.loads()."
     )
     
-    # Base user prompt with optional company details
     user_prompt = ""
     if company_name and company_website:
         user_prompt = (
@@ -88,7 +114,6 @@ def generate_kyb_report(company_name, company_website, api_key, model, u_user_pr
     else:
         user_prompt = "Please provide KYB due diligence information based on the following instructions:\n"
     
-    # Append custom prompt if provided
     if u_user_prompt:
         user_prompt += f"\n\nADDITIONAL REQUIREMENTS:\n{u_user_prompt}"
     
@@ -111,7 +136,6 @@ def generate_kyb_report(company_name, company_website, api_key, model, u_user_pr
         st.error(f"Error during API call: {e}")
         return None
     
-    # Extract JSON from response
     json_match = re.search(r'```json\s*(.*?)\s*```', output_text, re.DOTALL) or re.search(r'({.*})', output_text, re.DOTALL)
     if json_match:
         output_text = json_match.group(1)
@@ -119,14 +143,12 @@ def generate_kyb_report(company_name, company_website, api_key, model, u_user_pr
     try:
         kyb_report = json.loads(output_text)
         
-        # Normalize beneficial_owners
         if isinstance(kyb_report.get('beneficial_owners'), str):
             if kyb_report['beneficial_owners'] == "Not publicly available":
                 kyb_report['beneficial_owners'] = []
             else:
                 kyb_report['beneficial_owners'] = [{"name": kyb_report['beneficial_owners'], "ownership_percentage": "Unknown"}]
         
-        # Normalize risk_indicators
         if isinstance(kyb_report.get('risk_indicators'), str):
             if kyb_report['risk_indicators'] == "Not publicly available":
                 kyb_report['risk_indicators'] = []
@@ -189,98 +211,59 @@ def save_report(report, company_name):
         json.dump(report, f, indent=2)
     return filename
 
+def update_user_output(company_name, company_website, kyb_report, enrichment_data):
+    """Updates user_output.csv with new data."""
+    output_file = "user_output.csv"
+    columns = [
+        "Company Name", "Website", "Registration Number", "Incorporation Date",
+        "Beneficial Owners", "Financial Summary", "Risk Indicators", "About Info"
+    ]
+    
+    if os.path.exists(output_file):
+        df = pd.read_csv(output_file)
+    else:
+        df = pd.DataFrame(columns=columns)
+    
+    def flatten(value):
+        if isinstance(value, list):
+            if not value:
+                return "None"
+            if isinstance(value[0], dict):
+                return ", ".join(f"{item.get('name', 'Unknown')} ({item.get('ownership_percentage', 'Unknown')})" for item in value)
+            return ", ".join(str(item) for item in value)
+        return str(value)
+    
+    new_row = {
+        "Company Name": company_name or "Unknown",
+        "Website": company_website or "N/A",
+        "Registration Number": kyb_report.get("registration_number", "Not publicly available"),
+        "Incorporation Date": kyb_report.get("incorporation_date", "Not publicly available"),
+        "Beneficial Owners": flatten(kyb_report.get("beneficial_owners", [])),
+        "Financial Summary": flatten(kyb_report.get("financial_summary", "Not publicly available")),
+        "Risk Indicators": flatten(kyb_report.get("risk_indicators", [])),
+        "About Info": enrichment_data.get("about_info", "N/A")
+    }
+    
+    if company_name and company_name.lower() in df["Company Name"].str.lower().values:
+        idx = df[df["Company Name"].str.lower() == company_name.lower()].index[0]
+        df.loc[idx] = new_row
+    else:
+        df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
+    
+    df.to_csv(output_file, index=False)
+
 # Initialize session state for dashboard data
 if 'reports' not in st.session_state:
     st.session_state.reports = []
 
-# Main app logic
-if run_button:
-    if not api_key:
-        st.error("Please enter your API Key.")
-    elif not custom_prompt:
-        st.error("Please provide special instructions in the prompt field.")
-    else:
-        with st.spinner(f"Processing..."):
-            model = model_options[selected_model]
-            kyb_report = generate_kyb_report(company_name, company_website, api_key, model, custom_prompt)
-            if kyb_report:
-                enrichment_data = scrape_additional_data(company_name, company_website)
-                full_profile = {**kyb_report, "web_data": enrichment_data}
-                
-                # Save report
-                filename = save_report(full_profile, company_name)
-                st.success(f"Report saved as {filename}")
-                
-                # Add to dashboard data
-                st.session_state.reports.append({
-                    "Company Name": kyb_report.get("company_name", "N/A"),
-                    "Registration Number": kyb_report.get("registration_number", "Not publicly available"),
-                    "Incorporation Date": kyb_report.get("incorporation_date", "Not publicly available"),
-                    "Beneficial Owners": len(kyb_report.get("beneficial_owners", [])),
-                    "Risk Indicators": len(kyb_report.get("risk_indicators", [])),
-                    "Generated": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                })
-                
-                # Display report
-                tabs = st.tabs(["Report", "Dashboard"])
-                
-                with tabs[0]:
-                    st.header(f"KYB Report for {kyb_report.get('company_name', 'Unknown')}")
-                    col1, col2 = st.columns(2)
-                    
-                    with col1:
-                        st.subheader("Basic Information")
-                        st.write(f"**Company Name:** {kyb_report.get('company_name', 'N/A')}")
-                        st.write(f"**Website:** {company_website or 'N/A'}")
-                        st.write(f"**Registration Number:** {kyb_report.get('registration_number', 'Not publicly available')}")
-                        st.write(f"**Incorporation Date:** {kyb_report.get('incorporation_date', 'Not publicly available')}")
-                    
-                    with col2:
-                        st.subheader("Financial Summary")
-                        financial_summary = kyb_report.get('financial_summary', {})
-                        if isinstance(financial_summary, dict) and financial_summary:
-                            for key, value in financial_summary.items():
-                                st.write(f"**{key.replace('_', ' ').title()}:** {value}")
-                        else:
-                            st.write("Not publicly available")
-                    
-                    st.subheader("About")
-                    st.write(enrichment_data.get('about_info', 'N/A'))
-                    
-                    st.subheader("Beneficial Owners")
-                    owners = kyb_report.get('beneficial_owners', [])
-                    if owners:
-                        for i, owner in enumerate(owners, 1):
-                            st.write(f"{i}. {owner.get('name', 'Unknown')} - {owner.get('ownership_percentage', 'Unknown')}")
-                    else:
-                        st.write("No beneficial owners identified")
-                    
-                    st.subheader("Risk Indicators")
-                    risks = kyb_report.get('risk_indicators', [])
-                    if risks:
-                        for i, risk in enumerate(risks, 1):
-                            st.write(f"{i}. {risk}")
-                    else:
-                        st.write("No risk indicators identified")
-                    
-                    st.download_button(
-                        label="Download Report (JSON)",
-                        data=json.dumps(full_profile, indent=2),
-                        file_name=filename,
-                        mime="application/json"
-                    )
-                
-                with tabs[1]:
-                    st.header("Dashboard - Generated Reports")
-                    if st.session_state.reports:
-                        df = pd.DataFrame(st.session_state.reports)
-                        st.dataframe(df, use_container_width=True)
-                    else:
-                        st.write("No reports generated yet.")
-
-else:
-    st.info("Enter your API key and special instructions, then click 'Generate KYB Report'.")
-    st.markdown("### Examples of Special Instructions:")
-    st.write("- 'Only include companies with founder ownership'")
-    st.write("- 'Focus on European subsidiaries'")
-    st.write("- 'Provide data for tech startups founded after 2015'")
+# Admin login window
+if admin_login_button:
+    with st.form("admin_login"):
+        st.subheader("Admin Login")
+        username = st.text_input("Username")
+        password = st.text_input("Password", type="password")
+        submit = st.form_submit_button("Login")
+        
+        if submit:
+            if username == "ycxadmin" and password == "ycxadmin":
+                st.session_state.admin_logged_in = True
