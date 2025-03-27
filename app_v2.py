@@ -9,6 +9,14 @@ import pandas as pd
 from datetime import datetime
 import glob
 
+# File paths
+CORE_DATASET_PATH = "/home/opc/myenv/YCX-KYB/knowYourAi - Company Details.csv"
+USER_OUTPUT_PATH = "/home/opc/myenv/YCX-KYB/user_output.csv"
+REPORTS_DIR = "/home/opc/myenv/YCX-KYB/generated_reports"
+
+# Create reports directory if it doesn't exist
+os.makedirs(REPORTS_DIR, exist_ok=True)
+
 # Set page config
 st.set_page_config(
     page_title="KYB Due Diligence Tool",
@@ -28,6 +36,12 @@ if 'admin_logged_in' not in st.session_state:
     st.session_state.admin_logged_in = False
 if 'core_df' not in st.session_state:
     st.session_state.core_df = None
+
+# Input method selection
+input_choice = st.radio(
+    "Choose your input method:",
+    ["Enter Company Name", "Write Custom Prompt", "Admin View"]
+)
 
 # Sidebar for inputs
 with st.sidebar:
@@ -130,51 +144,33 @@ def scrape_additional_data(company_website):
         st.error(f"Scraping failed: {str(e)}")
         return {"about_info": "Failed to retrieve data"}
 
-def save_report(report, company_name):
-    """Save report as JSON."""
-    date_str = datetime.now().strftime("%Y-%m-%d")
-    filename = f"{company_name.replace(' ', '_')}_{date_str}.json" if company_name else f"KYB_Report_{date_str}.json"
-    try:
-        with open(filename, 'w') as f:
-            json.dump(report, f, indent=2)
-        return filename
-    except Exception as e:
-        st.error(f"Failed to save report: {str(e)}")
-        return None
+def save_report(company_name, report_data):
+    """Save report to JSON file"""
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename = f"{company_name.replace(' ', '_')}_{timestamp}.json"
+    filepath = os.path.join(REPORTS_DIR, filename)
+    with open(filepath, 'w') as f:
+        json.dump(report_data, f, indent=2)
 
-def update_user_output(company_name, company_website, kyb_report, enrichment_data):
-    """Update user_output.csv with new data and return the new row."""
-    output_file = "user_output.csv"
-    columns = ["Company Name", "Website", "Registration Number", "Incorporation Date", "Beneficial Owners", "Financial Summary", "Risk Indicators", "About Info"]
+def update_user_output(api_key, input_type, input_text, timestamp):
+    """Update user_output.csv with usage data"""
+    data = {
+        'api_key': [api_key],
+        'input_type': [input_type],
+        'input_text': [input_text],
+        'timestamp': [timestamp]
+    }
+    new_entry = pd.DataFrame(data)
     
     try:
-        if os.path.exists(output_file):
-            df = pd.read_csv(output_file)
+        if os.path.exists(USER_OUTPUT_PATH):
+            df = pd.read_csv(USER_OUTPUT_PATH)
+            df = pd.concat([df, new_entry], ignore_index=True)
         else:
-            df = pd.DataFrame(columns=columns)
-        
-        new_row = {
-            "Company Name": company_name or "Unknown",
-            "Website": company_website or "N/A",
-            "Registration Number": kyb_report.get("registration_number", "Not publicly available"),
-            "Incorporation Date": kyb_report.get("incorporation_date", "Not publicly available"),
-            "Beneficial Owners": ", ".join(f"{o.get('name', 'Unknown')} ({o.get('ownership_percentage', 'Unknown')})" for o in kyb_report.get("beneficial_owners", [])) or "None",
-            "Financial Summary": json.dumps(kyb_report.get("financial_summary", {"details": "Not publicly available"})),
-            "Risk Indicators": ", ".join(kyb_report.get("risk_indicators", [])) or "None",
-            "About Info": enrichment_data.get("about_info", "N/A")
-        }
-        
-        if company_name and company_name.lower() in df["Company Name"].str.lower().values:
-            idx = df[df["Company Name"].str.lower() == company_name.lower()].index[0]
-            df.loc[idx] = new_row
-        else:
-            df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
-        
-        df.to_csv(output_file, index=False)
-        return pd.DataFrame([new_row])
+            df = new_entry
+        df.to_csv(USER_OUTPUT_PATH, index=False)
     except Exception as e:
-        st.error(f"Failed to update user_output.csv: {str(e)}")
-        return None
+        st.error(f"Failed to update user_output.csv: {e}")
 
 def load_core_dataset():
     """Load core dataset if it exists."""
@@ -276,71 +272,77 @@ if st.session_state.admin_logged_in:
         st.session_state.admin_logged_in = False
         st.rerun()  # Force rerun to refresh UI
 
-elif run_button:
+elif input_choice == "Enter Company Name":
     if not api_key:
         st.error("Please enter your Groq API Key.")
-    elif not (company_name or custom_prompt):
-        st.error("Please provide either a company name or special instructions.")
+    elif not company_name:
+        st.error("Please enter a Company Name.")
     else:
-        model = model_options[selected_model]
-        core_df = load_core_dataset()
+        try:
+            # Load core dataset
+            df = pd.read_csv(CORE_DATASET_PATH)
+            
+            # Process company
+            with st.spinner(f"Processing {company_name}..."):
+                # Your existing processing code here...
+                kyb_report = generate_kyb_report(company_name, company_website, api_key)
+                if kyb_report:
+                    # Save report
+                    save_report(company_name, kyb_report)
+                    # Update usage log
+                    update_user_output(
+                        api_key=api_key,
+                        input_type="company_name",
+                        input_text=company_name,
+                        timestamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    )
+                    # Display report
+                    display_report(kyb_report)
+        except Exception as e:
+            st.error(f"Error: {e}")
+
+elif input_choice == "Write Custom Prompt":
+    if not api_key:
+        st.error("Please enter your Groq API Key.")
+    elif not custom_prompt:
+        st.error("Please enter your prompt.")
+    else:
+        try:
+            # Process custom prompt
+            with st.spinner("Processing your prompt..."):
+                response = generate_custom_response(api_key, custom_prompt)
+                if response:
+                    # Update usage log
+                    update_user_output(
+                        api_key=api_key,
+                        input_type="custom_prompt",
+                        input_text=custom_prompt,
+                        timestamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    )
+                    # Display response
+                    st.write(response)
+        except Exception as e:
+            st.error(f"Error: {e}")
+
+else:  # Admin View
+    # Add authentication for admin view
+    admin_password = st.text_input("Enter admin password", type="password")
+    if admin_password == "your_admin_password":  # Replace with secure authentication
+        st.header("Admin Dashboard")
         
-        if company_name:  # Option 1: Single company report
-            kyb_report = generate_kyb_report(company_name, company_website, api_key, model, custom_prompt)
-            if kyb_report:
-                enrichment_data = scrape_additional_data(company_website)
-                full_profile = {**kyb_report, "web_data": enrichment_data}
-                filename = save_report(full_profile, company_name)
-                if filename:
-                    st.success(f"Report saved as {filename}")
-                
-                new_row_df = update_user_output(company_name, company_website, kyb_report, enrichment_data)
-                if new_row_df is not None:
-                    tabs = st.tabs(["KYB Report", "Dashboard"])
-                    
-                    with tabs[0]:
-                        st.header(f"KYB Report for {kyb_report.get('company_name', 'Unknown')}")
-                        col1, col2 = st.columns(2)
-                        with col1:
-                            st.write(f"**Company Name:** {kyb_report.get('company_name', 'N/A')}")
-                            st.write(f"**Website:** {company_website or 'N/A'}")
-                            st.write(f"**Registration Number:** {kyb_report.get('registration_number', 'Not publicly available')}")
-                            st.write(f"**Incorporation Date:** {kyb_report.get('incorporation_date', 'Not publicly available')}")
-                        with col2:
-                            financial_summary = kyb_report.get('financial_summary', {})
-                            st.write("**Financial Summary:**")
-                            if isinstance(financial_summary, dict):
-                                for k, v in financial_summary.items():
-                                    st.write(f"{k.replace('_', ' ').title()}: {v}")
-                            else:
-                                st.write(financial_summary)
-                        
-                        st.write("**About:**", enrichment_data.get("about_info", "N/A"))
-                        st.write("**Beneficial Owners:**")
-                        for i, owner in enumerate(kyb_report.get("beneficial_owners", []), 1):
-                            st.write(f"{i}. {owner.get('name', 'Unknown')} ({owner.get('ownership_percentage', 'Unknown')})")
-                        st.write("**Risk Indicators:**")
-                        for i, risk in enumerate(kyb_report.get("risk_indicators", []), 1):
-                            st.write(f"{i}. {risk}")
-                        if filename:
-                            st.download_button(
-                                label="Download Report (JSON)",
-                                data=json.dumps(full_profile, indent=2),
-                                file_name=filename,
-                                mime="application/json"
-                            )
-                    
-                    with tabs[1]:
-                        st.subheader("Dashboard - New Row")
-                        st.dataframe(new_row_df, use_container_width=True)
+        # Display user output log
+        if os.path.exists(USER_OUTPUT_PATH):
+            st.subheader("Usage Log")
+            usage_df = pd.read_csv(USER_OUTPUT_PATH)
+            st.dataframe(usage_df)
         
-        elif custom_prompt:  # Option 2: Prompt-based query
-            result_df = process_prompt(custom_prompt, core_df, api_key, model)
-            if result_df is not None:
-                st.subheader("Dashboard - Prompt Results")
-                st.dataframe(result_df, use_container_width=True)
-            else:
-                st.warning("No results from prompt. Ensure the prompt is clear (e.g., 'Look for companies whose name starts with M').")
-else:
-    if not st.session_state.admin_logged_in:
-        st.info("Enter your Groq API key and either a company name or special instructions, then click 'Generate Report'.")
+        # Display generated reports
+        st.subheader("Generated Reports")
+        for filename in os.listdir(REPORTS_DIR):
+            if filename.endswith('.json'):
+                with open(os.path.join(REPORTS_DIR, filename), 'r') as f:
+                    report_data = json.load(f)
+                    with st.expander(f"Report: {filename}"):
+                        st.json(report_data)
+    else:
+        st.error("Please enter valid admin credentials to view this section.")
