@@ -47,7 +47,23 @@ input_choice = st.radio(
 with st.sidebar:
     st.header("Configuration")
     
+    # Updated model_options with all possible Groq LLMs
     model_options = {
+        "LLaMA 3 70B": "llama3-70b",
+        "LLaMA 3 8B": "llama3-8b",
+        "LLaMA 3.1 405B": "llama-3.1-405b",
+        "LLaMA 3.1 70B": "llama-3.1-70b",
+        "LLaMA 3.1 8B": "llama-3.1-8b",
+        "LLaMA 2 70B": "llama2-70b",
+        "Mistral 7B": "mistral-7b",
+        "Mixtral 8x22B": "mixtral-8x22b",
+        "Mistral Large 2": "mistral-large2",
+        "Mistral Saba 24B": "mistral-saba-24b",
+        "Gemma 7B": "gemma-7b",  # Assuming 7B as a common variant; adjust if specific
+        "Qwen QwQ-32B": "qwen-qwq-32b",
+        "DeepSeek R1": "deepseek-r1",  # Placeholder; specific variant may vary
+        "LLaMA 3 Groq Tool-Use 70B": "llama-3-grok-tool-use-70b",
+        "LLaMA 3 Groq Tool-Use 8B": "llama-3-grok-tool-use-8b",
         "LLaMA 3.3 70B Versatile": "llama-3.3-70b-versatile",
         "LLaMA 3.1 8B Instant": "llama-3.1-8b-instant",
         "LLaMA3 70B 8192": "llama3-70b-8192",
@@ -201,10 +217,9 @@ def update_user_output(api_key, input_type, input_text, timestamp):
 
 def load_core_dataset():
     """Load core dataset if it exists."""
-    core_file = "knowYourAi - Company Details.csv"  # Adjust this filename as needed
     try:
-        if os.path.exists(core_file):
-            st.session_state.core_df = pd.read_csv(core_file)
+        if os.path.exists(CORE_DATASET_PATH):
+            st.session_state.core_df = pd.read_csv(CORE_DATASET_PATH)
             return st.session_state.core_df
         return None
     except Exception as e:
@@ -221,7 +236,7 @@ def process_prompt(prompt, core_df, api_key, model):
     ]
     
     try:
-        with st.spinner(f"Processing prompt using {selected_model}..."):
+        with st.spinner(f"Processing prompt using {model}..."):
             response = client.chat.completions.create(
                 messages=messages,
                 model=model,
@@ -284,7 +299,7 @@ def display_report(report_data):
     with st.expander("View Raw JSON"):
         st.json(report_data)
 
-# Remove the admin_login_button check and keep only the Admin View section
+# Admin View logic
 if input_choice == "Admin View":
     with st.form("admin_login"):
         st.subheader("Admin Login")
@@ -306,13 +321,13 @@ if st.session_state.admin_logged_in:
     
     with tabs[0]:
         st.subheader("All Generated KYB Reports")
-        report_files = glob.glob("*.json")
+        report_files = glob.glob(os.path.join(REPORTS_DIR, "*.json"))
         if report_files:
             for file in report_files:
                 try:
                     with open(file, 'r') as f:
                         report_data = json.load(f)
-                    with st.expander(f"Report: {file}"):
+                    with st.expander(f"Report: {os.path.basename(file)}"):
                         st.json(report_data)
                 except Exception as e:
                     st.error(f"Error loading {file}: {str(e)}")
@@ -321,9 +336,9 @@ if st.session_state.admin_logged_in:
     
     with tabs[1]:
         st.subheader("User Output CSV")
-        if os.path.exists("user_output.csv"):
+        if os.path.exists(USER_OUTPUT_PATH):
             try:
-                df = pd.read_csv("user_output.csv")
+                df = pd.read_csv(USER_OUTPUT_PATH)
                 st.dataframe(
                     df,
                     height=600,
@@ -345,7 +360,7 @@ if st.session_state.admin_logged_in:
         st.session_state.admin_logged_in = False
         st.rerun()  # Force rerun to refresh UI
 
-elif input_choice == "Enter Company Name":
+elif input_choice == "Enter Company Name" and run_button:
     if not api_key:
         st.error("Please enter your Groq API Key.")
     elif not company_name:
@@ -353,16 +368,15 @@ elif input_choice == "Enter Company Name":
     else:
         try:
             # Load core dataset
-            df = pd.read_csv(CORE_DATASET_PATH)
+            df = load_core_dataset()
             
             # Process company
             with st.spinner(f"Processing {company_name}..."):
-                # Pass the selected model from sidebar
                 kyb_report = generate_kyb_report(
                     company_name=company_name,
                     company_website=company_website,
                     api_key=api_key,
-                    model=model_options[selected_model]  # Add this parameter
+                    model=model_options[selected_model]
                 )
                 if kyb_report:
                     # Save report
@@ -379,27 +393,17 @@ elif input_choice == "Enter Company Name":
         except Exception as e:
             st.error(f"Error: {e}")
 
-elif input_choice == "Write Custom Prompt":
+elif input_choice == "Write Custom Prompt" and run_button:
     if not api_key:
         st.error("Please enter your Groq API Key.")
     elif not custom_prompt:
         st.error("Please enter your prompt.")
     else:
         try:
-            # Process custom prompt using Groq API directly
-            client = Groq(api_key=api_key)
-            
+            core_df = load_core_dataset()
             with st.spinner("Processing your prompt..."):
-                response = client.chat.completions.create(
-                    messages=[
-                        {"role": "user", "content": custom_prompt}
-                    ],
-                    model=model_options[selected_model],
-                    temperature=0.3,
-                    max_tokens=1024
-                )
-                
-                if response:
+                result_df = process_prompt(custom_prompt, core_df, api_key, model_options[selected_model])
+                if result_df is not None:
                     # Update usage log
                     update_user_output(
                         api_key=api_key,
@@ -407,8 +411,13 @@ elif input_choice == "Write Custom Prompt":
                         input_text=custom_prompt,
                         timestamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                     )
-                    # Display response
-                    st.write("Response:")
-                    st.write(response.choices[0].message.content)
+                    st.subheader("Prompt Results")
+                    st.dataframe(result_df, use_container_width=True)
+                else:
+                    st.warning("No results from prompt.")
         except Exception as e:
             st.error(f"Error: {e}")
+
+else:
+    if not st.session_state.admin_logged_in:
+        st.info("Select an input method and click 'Generate Report' to proceed.")
