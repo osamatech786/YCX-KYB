@@ -66,7 +66,7 @@ with st.sidebar:
     admin_login_button = st.button("Admin Login")
 
 # Function definitions
-def generate_kyb_report(company_name, company_website, api_key, model, u_user_prompt=None):
+def generate_kyb_report(company_name, company_website, api_key, model):
     """Generate a KYB report using the selected Groq model."""
     client = Groq(api_key=api_key)
     system_prompt = (
@@ -74,12 +74,12 @@ def generate_kyb_report(company_name, company_website, api_key, model, u_user_pr
         "When given a company name and website, gather and summarize: registration number, "
         "incorporation date, beneficial owners, key financial metrics, and public risk indicators. "
         "Output ONLY a valid JSON object with keys: company_name, registration_number, incorporation_date, "
-        "beneficial_owners, financial_summary, risk_indicators."
+        "beneficial_owners, financial_summary, risk_indicators. Ensure the JSON is properly formatted "
+        "with correct commas and quotes. Use 'Not publicly available' for missing data."
     )
     
-    user_prompt = f"Company Name: {company_name}\nWebsite: {company_website or 'N/A'}\n\nPlease research {company_name} and provide all available information in JSON format."
-    if u_user_prompt:
-        user_prompt += f"\n\nADDITIONAL REQUIREMENTS:\n{u_user_prompt}"
+    user_prompt = f"Company Name: {company_name}\nWebsite: {company_website or 'N/A'}\n\n"
+    user_prompt += "Please research the company and provide information in valid JSON format. Ensure all JSON syntax is correct."
     
     messages = [
         {"role": "system", "content": system_prompt},
@@ -87,28 +87,56 @@ def generate_kyb_report(company_name, company_website, api_key, model, u_user_pr
     ]
     
     try:
-        with st.spinner(f"Generating report using {selected_model}..."):
+        with st.spinner(f"Generating report using {model}..."):
             response = client.chat.completions.create(
                 messages=messages,
                 model=model,
-                temperature=0.3,
+                temperature=0.1,  # Lower temperature for more consistent formatting
                 max_tokens=1024
             )
+            
         output_text = response.choices[0].message.content
-        json_match = re.search(r'```json\s*(.*?)\s*```', output_text, re.DOTALL) or re.search(r'({.*})', output_text, re.DOTALL)
-        if json_match:
-            output_text = json_match.group(1)
-        kyb_report = json.loads(output_text)
         
-        # Normalize data
-        if not isinstance(kyb_report.get('beneficial_owners', []), list):
-            kyb_report['beneficial_owners'] = [] if kyb_report.get('beneficial_owners') == "Not publicly available" else [{"name": str(kyb_report.get('beneficial_owners', 'Unknown')), "ownership_percentage": "Unknown"}]
-        if not isinstance(kyb_report.get('risk_indicators', []), list):
-            kyb_report['risk_indicators'] = [] if kyb_report.get('risk_indicators') == "Not publicly available" else [str(kyb_report.get('risk_indicators', ''))]
-        if not isinstance(kyb_report.get('financial_summary'), dict):
-            kyb_report['financial_summary'] = {"details": str(kyb_report.get('financial_summary', 'Not publicly available'))}
+        # Clean up the response text
+        output_text = output_text.strip()
+        if output_text.startswith("```json"):
+            output_text = output_text.replace("```json", "").replace("```", "")
         
+        # Try to fix common JSON formatting issues
+        output_text = output_text.replace("'", '"')  # Replace single quotes with double quotes
+        output_text = re.sub(r',\s*}', '}', output_text)  # Remove trailing commas
+        output_text = re.sub(r',\s*]', ']', output_text)  # Remove trailing commas in arrays
+        
+        try:
+            kyb_report = json.loads(output_text)
+        except json.JSONDecodeError as e:
+            st.error(f"JSON parsing error: {str(e)}")
+            st.text("Raw response:")
+            st.code(output_text)
+            return None
+        
+        # Normalize data structure
+        kyb_report = {
+            "company_name": company_name,
+            "registration_number": kyb_report.get("registration_number", "Not publicly available"),
+            "incorporation_date": kyb_report.get("incorporation_date", "Not publicly available"),
+            "beneficial_owners": kyb_report.get("beneficial_owners", []),
+            "financial_summary": kyb_report.get("financial_summary", {}),
+            "risk_indicators": kyb_report.get("risk_indicators", [])
+        }
+        
+        # Ensure proper data types
+        if not isinstance(kyb_report["beneficial_owners"], list):
+            kyb_report["beneficial_owners"] = [kyb_report["beneficial_owners"]] if kyb_report["beneficial_owners"] != "Not publicly available" else []
+            
+        if not isinstance(kyb_report["risk_indicators"], list):
+            kyb_report["risk_indicators"] = [kyb_report["risk_indicators"]] if kyb_report["risk_indicators"] != "Not publicly available" else []
+            
+        if not isinstance(kyb_report["financial_summary"], dict):
+            kyb_report["financial_summary"] = {"details": str(kyb_report["financial_summary"])}
+            
         return kyb_report
+        
     except Exception as e:
         st.error(f"Failed to generate report: {str(e)}")
         return None
