@@ -33,13 +33,11 @@ if 'core_df' not in st.session_state:
 with st.sidebar:
     st.header("Configuration")
     
-    # Model selection
     model_options = {
         "LLaMA 3.3 70B Versatile": "llama-3.3-70b-versatile",
         "LLaMA 3.1 8B Instant": "llama-3.1-8b-instant",
         "LLaMA3 70B 8192": "llama3-70b-8192",
         "LLaMA3 8B 8192": "llama3-8b-8192",
-        # Add more models as needed, excluding non-text models like Whisper
     }
     selected_model = st.selectbox("Select AI Model", list(model_options.keys()))
     
@@ -48,7 +46,7 @@ with st.sidebar:
     
     company_name = st.text_input("Company Name (Optional)", help="Enter for single company report.")
     company_website = st.text_input("Company Website (Optional)", help="Optional for single company report.")
-    custom_prompt = st.text_area("Special Instructions (Optional)", help="E.g., 'Provide all companies from core dataset that have company founders'")
+    custom_prompt = st.text_area("Special Instructions (Optional)", help="E.g., 'All companies from core dataset with revenue over 1M USD'")
     
     run_button = st.button("Generate Report", type="primary")
     admin_login_button = st.button("Admin Login")
@@ -59,22 +57,19 @@ def generate_kyb_report(company_name, company_website, api_key, model, u_user_pr
     client = Groq(api_key=api_key)
     system_prompt = (
         "You are a seasoned business analyst with expertise in KYB due diligence. "
-        "When given a company name and website (or a custom prompt), gather and summarize: "
-        "registration number, incorporation date, beneficial owners, key financial metrics, "
-        "and public risk indicators. Output ONLY a valid JSON object with keys: "
-        "company_name, registration_number, incorporation_date, beneficial_owners, financial_summary, risk_indicators. "
-        "For beneficial_owners, provide an array of objects with name and ownership_percentage when available."
+        "When given a company name and website, gather and summarize: registration number, "
+        "incorporation date, beneficial owners, key financial metrics, and public risk indicators. "
+        "Output ONLY a valid JSON object with keys: company_name, registration_number, incorporation_date, "
+        "beneficial_owners, financial_summary, risk_indicators."
     )
     
-    user_prompt = ""
-    if company_name:
-        user_prompt = f"Company Name: {company_name}\nWebsite: {company_website or 'N/A'}\n\nPlease research {company_name} and provide all available information in JSON format."
+    user_prompt = f"Company Name: {company_name}\nWebsite: {company_website or 'N/A'}\n\nPlease research {company_name} and provide all available information in JSON format."
     if u_user_prompt:
         user_prompt += f"\n\nADDITIONAL REQUIREMENTS:\n{u_user_prompt}"
     
     messages = [
         {"role": "system", "content": system_prompt},
-        {"role": "user", "content": user_prompt or "Provide a default KYB report structure."}
+        {"role": "user", "content": user_prompt}
     ]
     
     try:
@@ -145,7 +140,7 @@ def save_report(report, company_name):
         return None
 
 def update_user_output(company_name, company_website, kyb_report, enrichment_data):
-    """Update user_output.csv with new data."""
+    """Update user_output.csv with new data and return the new row."""
     output_file = "user_output.csv"
     columns = ["Company Name", "Website", "Registration Number", "Incorporation Date", "Beneficial Owners", "Financial Summary", "Risk Indicators", "About Info"]
     
@@ -179,33 +174,63 @@ def update_user_output(company_name, company_website, kyb_report, enrichment_dat
         return None
 
 def load_core_dataset():
-    """Load core dataset (assumed to be knowYourAi - Company Details.csv)."""
-    core_file = "knowYourAi - Company Details.csv"
+    """Load core dataset if it exists."""
+    core_file = "knowYourAi - Company Details.csv"  # Adjust this filename as needed
     try:
         if os.path.exists(core_file):
             st.session_state.core_df = pd.read_csv(core_file)
             return st.session_state.core_df
         else:
-            st.warning(f"Core dataset '{core_file}' not found.")
+            st.warning(f"Core dataset '{core_file}' not found. Prompt-based queries will not work.")
             return None
     except Exception as e:
         st.error(f"Failed to load core dataset: {str(e)}")
         return None
 
-def process_prompt(prompt, core_df):
-    """Process custom prompt against core dataset."""
-    if not core_df:
-        return None
-    try:
-        if "founders" in prompt.lower():
-            filtered_df = core_df[core_df["Founders"].notna() & (core_df["Founders"] != "")]
-            return filtered_df[["Company Name", "Website", "Founders"]]
-        else:
-            st.warning("Prompt not recognized. Example: 'Provide all companies from core dataset that have company founders'")
+def process_prompt(prompt, core_df, api_key, model):
+    """Process custom prompt using Groq API if core dataset is unavailable."""
+    if core_df is not None:
+        try:
+            if "revenue" in prompt.lower() and "1" in prompt.lower():
+                # Assuming a 'Revenue' column exists; adjust as per your dataset
+                if "Revenue" in core_df.columns:
+                    filtered_df = core_df[core_df["Revenue"].astype(str).str.replace('[^\d.]', '', regex=True).astype(float) > 1000000]
+                    return filtered_df[["Company Name", "Website", "Revenue"]]
+                else:
+                    st.warning("Revenue column not found in core dataset.")
+            else:
+                st.warning("Prompt not recognized. Example: 'All companies from core dataset with revenue over 1M USD'")
             return None
-    except Exception as e:
-        st.error(f"Failed to process prompt: {str(e)}")
-        return None
+        except Exception as e:
+            st.error(f"Failed to process prompt against core dataset: {str(e)}")
+            return None
+    else:
+        # Fallback to Groq API if no core dataset
+        client = Groq(api_key=api_key)
+        system_prompt = "You are a business analyst. Provide a list of companies based on the prompt in JSON format."
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": prompt}
+        ]
+        try:
+            with st.spinner(f"Processing prompt using {selected_model}..."):
+                response = client.chat.completions.create(
+                    messages=messages,
+                    model=model,
+                    temperature=0.3,
+                    max_tokens=1024
+                )
+            output_text = response.choices[0].message.content
+            json_match = re.search(r'```json\s*(.*?)\s*```', output_text, re.DOTALL) or re.search(r'({.*})', output_text, re.DOTALL)
+            if json_match:
+                output_text = json_match.group(1)
+            result = json.loads(output_text)
+            if isinstance(result, list):
+                return pd.DataFrame(result)
+            return None
+        except Exception as e:
+            st.error(f"Failed to process prompt with API: {str(e)}")
+            return None
 
 # Admin login
 if admin_login_button:
@@ -266,6 +291,8 @@ if st.session_state.admin_logged_in:
 elif run_button:
     if not api_key:
         st.error("Please enter your Groq API Key.")
+    elif not (company_name or custom_prompt):
+        st.error("Please provide either a company name or special instructions.")
     else:
         model = model_options[selected_model]
         core_df = load_core_dataset()
@@ -319,14 +346,12 @@ elif run_button:
                         st.subheader("Dashboard - New Row")
                         st.dataframe(new_row_df, use_container_width=True)
         
-        elif custom_prompt and core_df is not None:  # Option 2: Prompt-based query
-            result_df = process_prompt(custom_prompt, core_df)
+        elif custom_prompt:  # Option 2: Prompt-based query
+            result_df = process_prompt(custom_prompt, core_df, api_key, model)
             if result_df is not None:
                 st.subheader("Dashboard - Prompt Results")
                 st.dataframe(result_df, use_container_width=True)
             else:
                 st.warning("No results from prompt.")
-        else:
-            st.error("Please provide either a company name or a prompt.")
 else:
     st.info("Enter your Groq API key and either a company name or special instructions, then click 'Generate Report'.")
