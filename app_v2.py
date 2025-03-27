@@ -49,9 +49,10 @@ with st.sidebar:
     
     # Updated model_options with currently supported Groq models
     model_options = {
-        "Mixtral 8x7B": "mixtral-8x7b",
-        "LLaMA2 70B": "llama2-70b",
+        "Mixtral 8x7B": "mixtral-8x7b-32768",
         "Gemma 7B": "gemma-7b",
+        "Claude 3 Sonnet": "claude-3-sonnet",
+        "Claude 3 Opus": "claude-3-opus",
     }
     selected_model = st.selectbox("Select AI Model", list(model_options.keys()))
     
@@ -64,7 +65,7 @@ with st.sidebar:
             models = client.models.list()
             st.write("Available models:")
             for model in models:
-                st.write(f"- {model.id}")
+                st.write(f"- {model}")
         except Exception as e:
             st.error(f"Failed to list models: {str(e)}")
     
@@ -328,7 +329,7 @@ def list_available_models(api_key):
     client = Groq(api_key=api_key)
     try:
         models = client.models.list()
-        return [model.id for model in models]
+        return [model for model in models]
     except Exception as e:
         st.error(f"Failed to list models: {str(e)}")
         return []
