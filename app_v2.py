@@ -62,10 +62,32 @@ with st.sidebar:
     if api_key:
         try:
             client = Groq(api_key=api_key)
-            models = client.models.list()
-            st.write("Available models:")
-            for model in models:
-                st.write(f"- {model}")
+            models_response = client.models.list()
+            available_models = [model.id for model in models_response[0][1]]
+            
+            # Create a clean display name mapping
+            display_names = {
+                "llama3-70b-8192": "LLaMA 3 70B",
+                "llama3-8b-8192": "LLaMA 3 8B",
+                "llama-3.3-70b-versatile": "LLaMA 3.3 70B Versatile",
+                "qwen-qwq-32b": "Qwen QWQ 32B",
+                "mistral-saba-24b": "Mistral Saba 24B",
+                "gemma2-9b-it": "Gemma 2 9B",
+                "deepseek-r1-distill-llama-70b": "DeepSeek R1 Distill LLaMA 70B"
+            }
+
+            # Update model_options with only available models
+            model_options = {
+                display_names.get(model_id, model_id): model_id 
+                for model_id in available_models 
+                if not model_id.startswith(("whisper", "playai"))  # Filter out non-chat models
+            }
+
+            # Display available models in a clean format
+            st.write("Available Chat Models:")
+            for display_name, model_id in model_options.items():
+                st.write(f"- {display_name}")
+
         except Exception as e:
             st.error(f"Failed to list models: {str(e)}")
     
