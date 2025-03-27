@@ -297,7 +297,12 @@ if st.session_state.admin_logged_in:
         if os.path.exists("user_output.csv"):
             try:
                 df = pd.read_csv("user_output.csv")
-                st.dataframe(df, use_container_width=True)
+                st.dataframe(
+                    df,
+                    height=600,
+                    use_container_width=True,
+                    hide_index=True
+                )
                 st.download_button(
                     label="Download user_output.csv",
                     data=df.to_csv(index=False),
@@ -391,7 +396,12 @@ else:  # Admin View
         if os.path.exists(USER_OUTPUT_PATH):
             st.subheader("Usage Log")
             usage_df = pd.read_csv(USER_OUTPUT_PATH)
-            st.dataframe(usage_df)
+            st.dataframe(
+                usage_df,
+                height=600,
+                use_container_width=True,
+                hide_index=True
+            )
         
         # Display generated reports
         st.subheader("Generated Reports")
