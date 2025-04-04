@@ -1,0 +1,19 @@
+[[source]]
+url = "https://pypi.org/simple"
+verify_ssl = true
+name = "pypi"
+
+[packages]
+groq = "*"
+requests = "*"
+beautifulsoup4 = "*"
+streamlit = "*"
+pandas = "*"
+python-dotenv = "*"
+crewai = "*"
+transformers = "*"
+
+[dev-packages]
+
+[requires]
+python_version = "3.12"
