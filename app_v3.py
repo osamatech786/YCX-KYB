@@ -271,6 +271,22 @@ def create_agents(api_key, model):
 def run_crew_analysis(company_name, api_key, model):
     """Run the CrewAI workflow for company analysis"""
     try:
+        # First, test the Groq API directly
+        st.write("Testing Groq API connection...")
+        test_client = Groq(api_key=api_key)
+        try:
+            test_response = test_client.chat.completions.create(
+                model=model,
+                messages=[
+                    {"role": "user", "content": "Hello, are you working?"},
+                ]
+            )
+            st.success("Test LLM response succeeded")
+            st.write(test_response.choices[0].message.content)
+        except Exception as e:
+            st.error(f"Test Groq LLM failed: {str(e)}")
+            return None
+
         # Create agents with the Groq LLM
         scraper_agent, processor_agent, writer_agent = create_agents(api_key, model)
 
@@ -284,7 +300,7 @@ def run_crew_analysis(company_name, api_key, model):
             5. Any risk indicators or regulatory issues""",
             agent=scraper_agent,
             expected_output="Comprehensive company information from multiple sources",
-            max_iterations=3  # Limit the number of iterations to prevent infinite loops
+            max_iterations=3
         )
 
         processing_task = Task(
@@ -296,15 +312,14 @@ def run_crew_analysis(company_name, api_key, model):
             Ensure all data is properly formatted and validated.""",
             agent=processor_agent,
             expected_output="Structured and analyzed company data in JSON format",
-            context=[scraping_task]  # Use the output of the scraping task
+            context=[scraping_task]
         )
 
         saving_task = Task(
             description=f"Save the processed information for {company_name} in a structured format",
             agent=writer_agent,
             expected_output="Confirmation of data being saved",
-            context=[processing_task],  # Use the output of the processing task
-            # Pass company_name and processed_data as a tuple
+            context=[processing_task],
             function=lambda processed_data: (company_name, processed_data)
         )
 
@@ -316,14 +331,26 @@ def run_crew_analysis(company_name, api_key, model):
             process=Process.sequential
         )
 
+        # Run the crew and add debugging information
         result = crew.kickoff(inputs={"company_name": company_name})
-        if result is None or result.strip() == "":
-            st.warning("CrewAI analysis failed to retrieve data. Proceeding with KYB report generation.")
+        
+        # Debug the result
+        if result is None:
+            st.warning("Crew returned None. Debugging further...")
+            st.write(f"Scraper Agent LLM: {scraper_agent.llm}")
+            st.write(f"Model Used: {model}")
+            st.write(f"Company Name: {company_name}")
             return "No additional data found from CrewAI analysis."
+            
+        if result.strip() == "":
+            st.warning("CrewAI analysis returned empty result.")
+            return "No additional data found from CrewAI analysis."
+            
         return result
 
     except Exception as e:
         st.error(f"CrewAI workflow failed: {str(e)}")
+        st.write("Full error details:", str(e))
         return f"Error in CrewAI workflow: {str(e)}"
 
 # Function definitions
