@@ -9,15 +9,19 @@ import pandas as pd
 from datetime import datetime
 import glob
 from crewai import Agent, Task, Crew, Process
-from transformers import pipeline
 import sys
 import subprocess
 from crewai.tools.base_tool import BaseTool  # Use CrewAI's BaseTool
+import litellm  # For configuring Groq LLM with CrewAI
 
-# File paths
-CORE_DATASET_PATH = "/home/opc/myenv/YCX-KYB/knowYourAi - Company Details.csv"
-USER_OUTPUT_PATH = "/home/opc/myenv/YCX-KYB/user_output.csv"
-REPORTS_DIR = "/home/opc/myenv/YCX-KYB/generated_reports"
+# Disable CrewAI telemetry to avoid timeout errors
+os.environ["CREWAI_TELEMETRY"] = "false"
+print(f"CREWAI_TELEMETRY set to: {os.environ.get('CREWAI_TELEMETRY')}")
+
+# File paths (updated for Windows)
+CORE_DATASET_PATH = os.path.join("C:", "Users", "prokh", "Desktop", "git projects", "YCX-KYB", "knowYourAi - Company Details.csv")
+USER_OUTPUT_PATH = os.path.join("C:", "Users", "prokh", "Desktop", "git projects", "YCX-KYB", "user_output.csv")
+REPORTS_DIR = os.path.join("C:", "Users", "prokh", "Desktop", "git projects", "YCX-KYB", "generated_reports")
 
 # Create reports directory if it doesn't exist
 os.makedirs(REPORTS_DIR, exist_ok=True)
@@ -71,9 +75,6 @@ with st.sidebar:
     
     run_button = st.button("Generate Report", type="primary")
 
-# Initialize the local LLM for CrewAI (Hugging Face model)
-# summarizer = pipeline("summarization", model="facebook/bart-large-cnn")  # Commented out as per your code
-
 # First, define all the basic functions
 def scrape_web_for_company(company_name):
     """Enhanced web scraping for company information"""
@@ -87,22 +88,44 @@ def scrape_web_for_company(company_name):
         ]
         
         all_data = []
-        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/91.0.4472.124'}
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+        }
         
         for search_url in sources:
             try:
                 res = requests.get(search_url, headers=headers, timeout=15)
                 res.raise_for_status()
                 soup = BeautifulSoup(res.text, 'html.parser')
-                snippets = soup.find_all('div', class_='BNeawe s3v9rd AP7Wnd')
-                text = ' '.join([snippet.get_text() for snippet in snippets[:5]])
+
+                # Try multiple selectors to find search snippets
+                snippets = []
+                # Selector 1: Common Google search result snippet class
+                for selector in [
+                    ('div', {'class': 'BNeawe s3v9rd AP7Wnd'}),
+                    ('div', {'class': 'BNeawe vvjwJb AP7Wnd'}),  # Title of the result
+                    ('span', {'class': 'aCOpRe'}),  # Description snippet
+                    ('div', {'class': 'VwiC3b yXK7lf lVm3ye r025kc hJNv7e'})  # Another common snippet class
+                ]:
+                    elements = soup.find_all(selector[0], selector[1])
+                    snippets.extend([element.get_text(separator=" ", strip=True) for element in elements if element.get_text().strip()])
+
+                # If no snippets found, try extracting text from the main content area
+                if not snippets:
+                    main_content = soup.find('div', {'id': 'main'})
+                    if main_content:
+                        snippets.extend([main_content.get_text(separator=" ", strip=True)[:500]])
+
+                # Filter out empty snippets and join
+                text = ' '.join([snippet for snippet in snippets if snippet])
                 if text:
                     all_data.append(text)
             except Exception as e:
+                st.warning(f"Failed to scrape {search_url}: {str(e)}")
                 continue
         
         combined_data = ' '.join(all_data)
-        return combined_data if combined_data else "No additional data found."
+        return combined_data if combined_data else "No additional data found from web scraping."
         
     except Exception as e:
         return f"Error scraping web: {str(e)}"
@@ -195,43 +218,62 @@ scraper_tool = WebScraperTool()
 processor_tool = DataProcessorTool()
 saver_tool = DataSaverTool()
 
-# Define agents with the proper tool instances
-scraper_agent = Agent(
-    role="Web Scraper",
-    goal="Find comprehensive information about the company from reliable sources.",
-    backstory="""You are an expert web scraper specialized in finding accurate company 
-    information from various sources. You're known for your ability to gather detailed 
-    business intelligence.""",
-    tools=[scraper_tool],
-    verbose=True,
-    allow_delegation=False
-)
+# Define agents with the proper tool instances and Groq LLM
+def create_agents(api_key, model):
+    from crewai import LLM  # Import CrewAI's LLM class
 
-processor_agent = Agent(
-    role="Data Analyst",
-    goal="Analyze and structure company information into useful insights.",
-    backstory="""You are a skilled data analyst with expertise in processing and 
-    analyzing company information. You excel at identifying key business metrics 
-    and risk factors.""",
-    tools=[processor_tool],
-    verbose=True,
-    allow_delegation=False
-)
+    # Create an LLM instance using CrewAI's LLM class
+    groq_llm = LLM(
+        model=f"groq/{model}",  # Explicitly specify the provider as 'groq'
+        api_key=api_key,
+        temperature=0.1,
+        max_tokens=1024
+    )
 
-writer_agent = Agent(
-    role="Data Engineer",
-    goal="Save and organize company information in a structured format.",
-    backstory="""You are a detail-oriented data engineer who ensures all company 
-    information is properly stored and organized.""",
-    tools=[saver_tool],
-    verbose=True,
-    allow_delegation=False
-)
+    scraper_agent = Agent(
+        role="Web Scraper",
+        goal="Find comprehensive information about the company from reliable sources.",
+        backstory="""You are an expert web scraper specialized in finding accurate company 
+        information from various sources. You're known for your ability to gather detailed 
+        business intelligence.""",
+        tools=[scraper_tool],
+        verbose=True,
+        allow_delegation=False,
+        llm=groq_llm  # Pass the Groq LLM
+    )
+
+    processor_agent = Agent(
+        role="Data Analyst",
+        goal="Analyze and structure company information into useful insights.",
+        backstory="""You are a skilled data analyst with expertise in processing and 
+        analyzing company information. You excel at identifying key business metrics 
+        and risk factors.""",
+        tools=[processor_tool],
+        verbose=True,
+        allow_delegation=False,
+        llm=groq_llm  # Pass the Groq LLM
+    )
+
+    writer_agent = Agent(
+        role="Data Engineer",
+        goal="Save and organize company information in a structured format.",
+        backstory="""You are a detail-oriented data engineer who ensures all company 
+        information is properly stored and organized.""",
+        tools=[saver_tool],
+        verbose=True,
+        allow_delegation=False,
+        llm=groq_llm  # Pass the Groq LLM
+    )
+
+    return scraper_agent, processor_agent, writer_agent
 
 # Then define the crew analysis function
 def run_crew_analysis(company_name, api_key, model):
     """Run the CrewAI workflow for company analysis"""
     try:
+        # Create agents with the Groq LLM
+        scraper_agent, processor_agent, writer_agent = create_agents(api_key, model)
+
         # Define tasks with more specific instructions
         scraping_task = Task(
             description=f"""Search for detailed information about {company_name}, including:
@@ -242,6 +284,7 @@ def run_crew_analysis(company_name, api_key, model):
             5. Any risk indicators or regulatory issues""",
             agent=scraper_agent,
             expected_output="Comprehensive company information from multiple sources",
+            max_iterations=3  # Limit the number of iterations to prevent infinite loops
         )
 
         processing_task = Task(
@@ -274,20 +317,26 @@ def run_crew_analysis(company_name, api_key, model):
         )
 
         result = crew.kickoff(inputs={"company_name": company_name})
+        if result is None or result.strip() == "":
+            st.warning("CrewAI analysis failed to retrieve data. Proceeding with KYB report generation.")
+            return "No additional data found from CrewAI analysis."
         return result
 
     except Exception as e:
         st.error(f"CrewAI workflow failed: {str(e)}")
-        return None
+        return f"Error in CrewAI workflow: {str(e)}"
 
-# Function definitions (unchanged from your original code)
+# Function definitions
 def generate_kyb_report(company_name, company_website, api_key, model):
-    """Generate a KYB report using the selected Groq model."""
+    """Generate a KYB report using the selected Groq model with a fallback to web scraping."""
     client = Groq(api_key=api_key)
     system_prompt = (
         "You are a seasoned business analyst with expertise in KYB due diligence. "
-        "When given a company name and website, gather and summarize: registration number, "
-        "incorporation date, beneficial owners, key financial metrics, and public risk indicators. "
+        "When given a company name and website, research and summarize the following: "
+        "registration number, incorporation date, beneficial owners, key financial metrics (e.g., revenue, net income, total assets), "
+        "and public risk indicators (e.g., legal issues, sanctions). "
+        "If specific details are not available, search for general information about the company, such as its founding year, leadership team, "
+        "recent news, or financial performance indicators. "
         "Output ONLY a valid JSON object with keys: company_name, registration_number, incorporation_date, "
         "beneficial_owners, financial_summary, risk_indicators. Ensure the JSON is properly formatted "
         "with correct commas and quotes. Use 'Not publicly available' for missing data."
@@ -328,6 +377,64 @@ def generate_kyb_report(company_name, company_website, api_key, model):
             st.code(output_text)
             return None
         
+        # Check if the report has mostly "Not publicly available" fields
+        has_data = False
+        for key in ["registration_number", "incorporation_date"]:
+            if kyb_report.get(key, "Not publicly available") != "Not publicly available":
+                has_data = True
+                break
+        if kyb_report.get("beneficial_owners", []) or kyb_report.get("risk_indicators", []):
+            has_data = True
+        if kyb_report.get("financial_summary", {}).get("revenue", "Not publicly available") != "Not publicly available":
+            has_data = True
+
+        # If the report lacks data, use the Web Scraper as a fallback
+        if not has_data:
+            st.warning("Groq API returned limited data. Falling back to web scraping...")
+            scraped_data = scrape_web_for_company(company_name)
+            if scraped_data and "No additional data found" not in scraped_data:
+                # Process the scraped data to extract relevant information
+                additional_info = {
+                    "company_name": company_name,
+                    "registration_number": "Not publicly available",
+                    "incorporation_date": "Not publicly available",
+                    "beneficial_owners": [],
+                    "financial_summary": {"revenue": "Not publicly available", "net_income": "Not publicly available", "total_assets": "Not publicly available"},
+                    "risk_indicators": []
+                }
+
+                # Extract incorporation date (e.g., "founded in 2023")
+                date_match = re.search(r'(?:founded|established|incorporated)\s*(?:in)?\s*(\d{4})', scraped_data, re.IGNORECASE)
+                if date_match:
+                    additional_info["incorporation_date"] = date_match.group(1)
+
+                # Extract financial data (e.g., "revenue of $100M")
+                revenue_match = re.search(r'revenue\s*(?:of)?\s*\$?([\d,.]+)\s*(million|billion)?', scraped_data, re.IGNORECASE)
+                if revenue_match:
+                    amount = revenue_match.group(1).replace(",", "")
+                    unit = revenue_match.group(2).lower() if revenue_match.group(2) else "unknown"
+                    if unit == "million":
+                        additional_info["financial_summary"]["revenue"] = f"${amount}M"
+                    elif unit == "billion":
+                        additional_info["financial_summary"]["revenue"] = f"${amount}B"
+                    else:
+                        additional_info["financial_summary"]["revenue"] = f"${amount}"
+
+                # Extract beneficial owners (e.g., "CEO John Doe")
+                owner_match = re.search(r'(CEO|Founder|Owner)\s*([A-Z][a-z]+\s[A-Z][a-z]+)', scraped_data, re.IGNORECASE)
+                if owner_match:
+                    additional_info["beneficial_owners"] = [owner_match.group(2)]
+
+                # Extract risk indicators (e.g., "lawsuit", "sanction")
+                if any(keyword in scraped_data.lower() for keyword in ["lawsuit", "sanction", "fraud", "regulatory issue"]):
+                    additional_info["risk_indicators"] = ["Potential legal or regulatory issues identified"]
+
+                # Merge the scraped data into the KYB report
+                for key in additional_info:
+                    if key in kyb_report and additional_info[key] and additional_info[key] != "Not publicly available" and additional_info[key] != []:
+                        kyb_report[key] = additional_info[key]
+
+        # Ensure the report has the required structure
         kyb_report = {
             "company_name": company_name,
             "registration_number": kyb_report.get("registration_number", "Not publicly available"),
@@ -422,6 +529,86 @@ def load_core_dataset():
         st.error(f"Failed to load core dataset: {str(e)}")
         return None
 
+# Define the display_report function before it's called
+def display_report(report_data):
+    """Display the KYB report in a structured format"""
+    st.header("KYB Report")
+    
+    # Basic Information
+    st.subheader("Basic Information")
+    col1, col2 = st.columns(2)
+    with col1:
+        st.write(f"**Company Name:** {report_data.get('company_name', 'N/A')}")
+        st.write(f"**Registration Number:** {report_data.get('registration_number', 'N/A')}")
+    with col2:
+        st.write(f"**Incorporation Date:** {report_data.get('incorporation_date', 'N/A')}")
+    
+    # Financial Summary
+    st.subheader("Financial Summary")
+    financial_summary = report_data.get('financial_summary', {})
+    if isinstance(financial_summary, dict):
+        for key, value in financial_summary.items():
+            st.write(f"**{key.replace('_', ' ').title()}:** {value}")
+    else:
+        st.write(financial_summary)
+    
+    # Beneficial Owners
+    st.subheader("Beneficial Owners")
+    beneficial_owners = report_data.get('beneficial_owners', [])
+    if beneficial_owners:
+        for owner in beneficial_owners:
+            if isinstance(owner, dict):
+                st.write(f"- **{owner.get('name', 'Unknown')}** ({owner.get('ownership_percentage', 'Unknown')})")
+            else:
+                st.write(f"- {owner}")
+    else:
+        st.write("No beneficial owners information available")
+    
+    # Risk Indicators
+    st.subheader("Risk Indicators")
+    risk_indicators = report_data.get('risk_indicators', [])
+    if risk_indicators:
+        for risk in risk_indicators:
+            st.write(f"- {risk}")
+    else:
+        st.write("No risk indicators identified")
+    
+    # Raw JSON
+    with st.expander("View Raw JSON"):
+        st.json(report_data)
+
+# Placeholder for process_prompt (since it's not defined)
+def process_prompt(prompt, df, api_key, model):
+    """Process a custom prompt using the Groq API and return results as a DataFrame."""
+    try:
+        client = Groq(api_key=api_key)
+        system_prompt = """
+        You are a data analyst. Based on the given prompt, search for relevant company information
+        and return the results in a structured format suitable for a DataFrame.
+        """
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": prompt}
+        ]
+        response = client.chat.completions.create(
+            messages=messages,
+            model=model,
+            temperature=0.1,
+            max_tokens=1024
+        )
+        output_text = response.choices[0].message.content
+        
+        # For simplicity, let's assume the response is a JSON string that can be converted to a DataFrame
+        try:
+            data = json.loads(output_text)
+            return pd.DataFrame(data)
+        except json.JSONDecodeError:
+            st.error("Failed to parse prompt response as JSON.")
+            return pd.DataFrame()
+    except Exception as e:
+        st.error(f"Error processing prompt: {str(e)}")
+        return pd.DataFrame()
+
 # Main logic section
 if input_choice == "Admin View":
     with st.form("admin_login"):
@@ -497,50 +684,3 @@ elif input_choice == "Write Custom Prompt" and run_button:
 else:
     if not st.session_state.admin_logged_in:
         st.info("Select an input method and click 'Generate Report' to proceed.")
-
-def display_report(report_data):
-    """Display the KYB report in a structured format"""
-    st.header("KYB Report")
-    
-    # Basic Information
-    st.subheader("Basic Information")
-    col1, col2 = st.columns(2)
-    with col1:
-        st.write(f"**Company Name:** {report_data.get('company_name', 'N/A')}")
-        st.write(f"**Registration Number:** {report_data.get('registration_number', 'N/A')}")
-    with col2:
-        st.write(f"**Incorporation Date:** {report_data.get('incorporation_date', 'N/A')}")
-    
-    # Financial Summary
-    st.subheader("Financial Summary")
-    financial_summary = report_data.get('financial_summary', {})
-    if isinstance(financial_summary, dict):
-        for key, value in financial_summary.items():
-            st.write(f"**{key.replace('_', ' ').title()}:** {value}")
-    else:
-        st.write(financial_summary)
-    
-    # Beneficial Owners
-    st.subheader("Beneficial Owners")
-    beneficial_owners = report_data.get('beneficial_owners', [])
-    if beneficial_owners:
-        for owner in beneficial_owners:
-            if isinstance(owner, dict):
-                st.write(f"- **{owner.get('name', 'Unknown')}** ({owner.get('ownership_percentage', 'Unknown')})")
-            else:
-                st.write(f"- {owner}")
-    else:
-        st.write("No beneficial owners information available")
-    
-    # Risk Indicators
-    st.subheader("Risk Indicators")
-    risk_indicators = report_data.get('risk_indicators', [])
-    if risk_indicators:
-        for risk in risk_indicators:
-            st.write(f"- {risk}")
-    else:
-        st.write("No risk indicators identified")
-    
-    # Raw JSON
-    with st.expander("View Raw JSON"):
-        st.json(report_data)
