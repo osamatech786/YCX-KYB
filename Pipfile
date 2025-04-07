@@ -11,7 +11,10 @@ streamlit = "*"
 pandas = "*"
 python-dotenv = "*"
 crewai = "*"
+crewai-tools = "*"
+tokenizers = "<0.22,>=0.21"
 transformers = "*"
+torch = "*"
 
 [dev-packages]
 
