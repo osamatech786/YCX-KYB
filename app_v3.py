@@ -12,7 +12,7 @@ from crewai import Agent, Task, Crew, Process
 from transformers import pipeline
 import sys
 import subprocess
-from langchain.tools import Tool
+from crewai.tools.base_tool import BaseTool  # Use CrewAI's BaseTool
 
 # File paths
 CORE_DATASET_PATH = "/home/opc/myenv/YCX-KYB/knowYourAi - Company Details.csv"
@@ -72,68 +72,7 @@ with st.sidebar:
     run_button = st.button("Generate Report", type="primary")
 
 # Initialize the local LLM for CrewAI (Hugging Face model)
-# summarizer = pipeline("summarization", model="facebook/bart-large-cnn")
-
-# Define Custom Tools by Subclassing BaseTool
-# class ScrapeWebTool(BaseTool):
-#     name: str = "Web Scraper"
-#     description: str = "Scrapes additional data about a company from the web."
-#
-#     def _run(self, company_name: str) -> str:
-#         try:
-#             search_url = f"https://www.google.com/search?q={company_name}+news+site:*.org+site:*.gov+-inurl:(signup | login)"
-#             headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/91.0.4472.124'}
-#             res = requests.get(search_url, headers=headers, timeout=15)
-#             res.raise_for_status()
-#             soup = BeautifulSoup(res.text, 'html.parser')
-#             snippets = soup.find_all('div', class_='BNeawe s3v9rd AP7Wnd')  # Google search snippet class
-#             text = ' '.join([snippet.get_text() for snippet in snippets[:3]])  # Take first 3 snippets
-#             if not text:
-#                 return "No additional data found."
-#             return text
-#         except Exception as e:
-#             return f"Error scraping web: {str(e)}"
-
-# class ProcessDataTool(BaseTool):
-#     name: str = "Data Processor"
-#     description: str = "Processes and summarizes scraped data using a local LLM."
-#
-#     def _run(self, text: str) -> str:
-#         try:
-#             summary = summarizer(text, max_length=100, min_length=30, do_sample=False)
-#             return summary[0]['summary_text']
-#         except Exception as e:
-#             return f"Error processing data: {str(e)}"
-
-# class SaveToCSVTool(BaseTool):
-#     name: str = "CSV Writer"
-#     description: str = "Saves processed data into the core dataset CSV file."
-#
-#     def _run(self, data: dict) -> str:
-#         try:
-#             company_name = data.get('company_name')
-#             processed_data = data.get('processed_data')
-#             if not company_name or not processed_data:
-#                 return "Error: Missing company_name or processed_data"
-#             new_data = pd.DataFrame({
-#                 "company_name": [company_name],
-#                 "additional_info": [processed_data],
-#                 "timestamp": [datetime.now().strftime("%Y-%m-%d %H:%M:%S")]
-#             })
-#             if os.path.exists(CORE_DATASET_PATH):
-#                 existing_data = pd.read_csv(CORE_DATASET_PATH)
-#                 updated_data = pd.concat([existing_data, new_data], ignore_index=True)
-#             else:
-#                 updated_data = new_data
-#             updated_data.to_csv(CORE_DATASET_PATH, index=False)
-#             return f"Data saved to {CORE_DATASET_PATH}"
-#         except Exception as e:
-#             return f"Error saving to CSV: {str(e)}"
-
-# Instantiate the Tools
-# scrape_tool = ScrapeWebTool()
-# process_tool = ProcessDataTool()
-# save_tool = SaveToCSVTool()
+# summarizer = pipeline("summarization", model="facebook/bart-large-cnn")  # Commented out as per your code
 
 # First, define all the basic functions
 def scrape_web_for_company(company_name):
@@ -152,9 +91,9 @@ def scrape_web_for_company(company_name):
         
         for search_url in sources:
             try:
-        res = requests.get(search_url, headers=headers, timeout=15)
-        res.raise_for_status()
-        soup = BeautifulSoup(res.text, 'html.parser')
+                res = requests.get(search_url, headers=headers, timeout=15)
+                res.raise_for_status()
+                soup = BeautifulSoup(res.text, 'html.parser')
                 snippets = soup.find_all('div', class_='BNeawe s3v9rd AP7Wnd')
                 text = ' '.join([snippet.get_text() for snippet in snippets[:5]])
                 if text:
@@ -218,33 +157,52 @@ def save_to_core_dataset(company_name, processed_data):
     except Exception as e:
         return f"Error saving to CSV: {str(e)}"
 
-# Then define the tools
-scraping_tool = Tool(
-    name="Web Scraper",
-    func=scrape_web_for_company,
-    description="Scrapes company information from the web"
-)
+# Define custom tools by inheriting from BaseTool with proper type annotations
+class WebScraperTool(BaseTool):
+    name: str = "Web Scraper"
+    description: str = "Scrapes company information from the web"
 
-processing_tool = Tool(
-    name="Data Processor",
-    func=lambda x: process_data_with_llm(x, api_key, model_options[selected_model]),
-    description="Processes and analyzes company data"
-)
+    def _run(self, company_name: str) -> str:
+        return scrape_web_for_company(company_name)
+    
+    def _arun(self, company_name: str) -> str:
+        # Async version - can be same as _run for now
+        return self._run(company_name)
 
-saving_tool = Tool(
-    name="Data Saver",
-    func=save_to_core_dataset,
-    description="Saves processed data to CSV"
-)
+class DataProcessorTool(BaseTool):
+    name: str = "Data Processor"
+    description: str = "Processes and analyzes company data"
 
-# Then define the agents
+    def _run(self, text: str) -> str:
+        return process_data_with_llm(text, api_key, model_options[selected_model])
+    
+    def _arun(self, text: str) -> str:
+        return self._run(text)
+
+class DataSaverTool(BaseTool):
+    name: str = "Data Saver"
+    description: str = "Saves processed data to CSV"
+
+    def _run(self, company_name_and_data: tuple) -> str:
+        company_name, processed_data = company_name_and_data
+        return save_to_core_dataset(company_name, processed_data)
+    
+    def _arun(self, company_name_and_data: tuple) -> str:
+        return self._run(company_name_and_data)
+
+# Create tool instances
+scraper_tool = WebScraperTool()
+processor_tool = DataProcessorTool()
+saver_tool = DataSaverTool()
+
+# Define agents with the proper tool instances
 scraper_agent = Agent(
     role="Web Scraper",
     goal="Find comprehensive information about the company from reliable sources.",
     backstory="""You are an expert web scraper specialized in finding accurate company 
     information from various sources. You're known for your ability to gather detailed 
     business intelligence.""",
-    tools=[scraping_tool],
+    tools=[scraper_tool],
     verbose=True,
     allow_delegation=False
 )
@@ -255,7 +213,7 @@ processor_agent = Agent(
     backstory="""You are a skilled data analyst with expertise in processing and 
     analyzing company information. You excel at identifying key business metrics 
     and risk factors.""",
-    tools=[processing_tool],
+    tools=[processor_tool],
     verbose=True,
     allow_delegation=False
 )
@@ -265,7 +223,7 @@ writer_agent = Agent(
     goal="Save and organize company information in a structured format.",
     backstory="""You are a detail-oriented data engineer who ensures all company 
     information is properly stored and organized.""",
-    tools=[saving_tool],
+    tools=[saver_tool],
     verbose=True,
     allow_delegation=False
 )
@@ -284,7 +242,6 @@ def run_crew_analysis(company_name, api_key, model):
             5. Any risk indicators or regulatory issues""",
             agent=scraper_agent,
             expected_output="Comprehensive company information from multiple sources",
-            function=lambda: scrape_web_for_company(company_name)
         )
 
         processing_task = Task(
@@ -295,15 +252,17 @@ def run_crew_analysis(company_name, api_key, model):
             4. Risk assessment
             Ensure all data is properly formatted and validated.""",
             agent=processor_agent,
-            expected_output="Structured and analyzed company data",
-            function=lambda scraped_data: process_data_with_llm(scraped_data, api_key, model)
+            expected_output="Structured and analyzed company data in JSON format",
+            context=[scraping_task]  # Use the output of the scraping task
         )
 
         saving_task = Task(
-            description="Save the processed information in a structured format",
+            description=f"Save the processed information for {company_name} in a structured format",
             agent=writer_agent,
             expected_output="Confirmation of data being saved",
-            function=lambda processed_data: save_to_core_dataset(company_name, processed_data)
+            context=[processing_task],  # Use the output of the processing task
+            # Pass company_name and processed_data as a tuple
+            function=lambda processed_data: (company_name, processed_data)
         )
 
         # Create and run the crew with sequential process
@@ -314,7 +273,7 @@ def run_crew_analysis(company_name, api_key, model):
             process=Process.sequential
         )
 
-        result = crew.kickoff()
+        result = crew.kickoff(inputs={"company_name": company_name})
         return result
 
     except Exception as e:
