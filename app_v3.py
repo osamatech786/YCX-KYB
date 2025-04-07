@@ -8,10 +8,11 @@ from groq import Groq
 import pandas as pd
 from datetime import datetime
 import glob
-from crewai import Agent, Task, Crew
+from crewai import Agent, Task, Crew, Process
 from transformers import pipeline
 import sys
 import subprocess
+from langchain.tools import Tool
 
 # File paths
 CORE_DATASET_PATH = "/home/opc/myenv/YCX-KYB/knowYourAi - Company Details.csv"
@@ -134,31 +135,191 @@ with st.sidebar:
 # process_tool = ProcessDataTool()
 # save_tool = SaveToCSVTool()
 
-# Define CrewAI Agents with Tools
-# scraper_agent = Agent(
-#     role="Web Scraper",
-#     goal="Scrape additional data about a company from the web.",
-#     backstory="You are an expert web scraper with years of experience finding public information about companies.",
-#     verbose=True,
-#     allow_delegation=False,
-#     tools=[scrape_tool]
-# )
+# First, define all the basic functions
+def scrape_web_for_company(company_name):
+    """Enhanced web scraping for company information"""
+    try:
+        # Search multiple sources
+        sources = [
+            f"https://www.google.com/search?q={company_name}+company+registration+information",
+            f"https://www.google.com/search?q={company_name}+financial+results+annual+report",
+            f"https://www.google.com/search?q={company_name}+executives+management+team",
+            f"https://www.google.com/search?q={company_name}+news+recent+developments"
+        ]
+        
+        all_data = []
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/91.0.4472.124'}
+        
+        for search_url in sources:
+            try:
+        res = requests.get(search_url, headers=headers, timeout=15)
+        res.raise_for_status()
+        soup = BeautifulSoup(res.text, 'html.parser')
+                snippets = soup.find_all('div', class_='BNeawe s3v9rd AP7Wnd')
+                text = ' '.join([snippet.get_text() for snippet in snippets[:5]])
+                if text:
+                    all_data.append(text)
+            except Exception as e:
+                continue
+        
+        combined_data = ' '.join(all_data)
+        return combined_data if combined_data else "No additional data found."
+        
+    except Exception as e:
+        return f"Error scraping web: {str(e)}"
+
+def process_data_with_llm(text, api_key, model):
+    """Process the scraped data using Groq API."""
+    try:
+        client = Groq(api_key=api_key)
+        
+        system_prompt = """
+        You are a data analyst processing company information. Analyze and summarize the provided text.
+        Format your response as a structured JSON with these fields:
+        - summary: Brief overview of key points
+        - key_findings: List of important discoveries
+        - risk_factors: Any potential risk indicators identified
+        Ensure the response is properly formatted JSON.
+        """
+        
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": f"Analyze this company information: {text}"}
+        ]
+        
+        response = client.chat.completions.create(
+            messages=messages,
+            model=model,
+            temperature=0.1,
+            max_tokens=1024
+        )
+        
+        output_text = response.choices[0].message.content
+        return output_text
+        
+    except Exception as e:
+        return f"Error processing data: {str(e)}"
+
+def save_to_core_dataset(company_name, processed_data):
+    """Save the processed data into the core dataset CSV."""
+    try:
+        new_data = pd.DataFrame({
+            "company_name": [company_name],
+            "additional_info": [processed_data],
+            "timestamp": [datetime.now().strftime("%Y-%m-%d %H:%M:%S")]
+        })
+        if os.path.exists(CORE_DATASET_PATH):
+            existing_data = pd.read_csv(CORE_DATASET_PATH)
+            updated_data = pd.concat([existing_data, new_data], ignore_index=True)
+        else:
+            updated_data = new_data
+        updated_data.to_csv(CORE_DATASET_PATH, index=False)
+        return f"Data saved to {CORE_DATASET_PATH}"
+    except Exception as e:
+        return f"Error saving to CSV: {str(e)}"
+
+# Then define the tools
+scraping_tool = Tool(
+    name="Web Scraper",
+    func=scrape_web_for_company,
+    description="Scrapes company information from the web"
+)
+
+processing_tool = Tool(
+    name="Data Processor",
+    func=lambda x: process_data_with_llm(x, api_key, model_options[selected_model]),
+    description="Processes and analyzes company data"
+)
+
+saving_tool = Tool(
+    name="Data Saver",
+    func=save_to_core_dataset,
+    description="Saves processed data to CSV"
+)
+
+# Then define the agents
+scraper_agent = Agent(
+    role="Web Scraper",
+    goal="Find comprehensive information about the company from reliable sources.",
+    backstory="""You are an expert web scraper specialized in finding accurate company 
+    information from various sources. You're known for your ability to gather detailed 
+    business intelligence.""",
+    tools=[scraping_tool],
+    verbose=True,
+    allow_delegation=False
+)
 
 processor_agent = Agent(
-    role="Data Processor",
-    goal="Process and summarize scraped data using a local LLM.",
-    backstory="You are a data analyst skilled in using LLMs to extract insights and summarize text.",
+    role="Data Analyst",
+    goal="Analyze and structure company information into useful insights.",
+    backstory="""You are a skilled data analyst with expertise in processing and 
+    analyzing company information. You excel at identifying key business metrics 
+    and risk factors.""",
+    tools=[processing_tool],
     verbose=True,
     allow_delegation=False
 )
 
 writer_agent = Agent(
-    role="CSV Writer",
-    goal="Save processed data into the core dataset CSV file.",
-    backstory="You are a data engineer who ensures data is properly stored in CSV format.",
+    role="Data Engineer",
+    goal="Save and organize company information in a structured format.",
+    backstory="""You are a detail-oriented data engineer who ensures all company 
+    information is properly stored and organized.""",
+    tools=[saving_tool],
     verbose=True,
     allow_delegation=False
 )
+
+# Then define the crew analysis function
+def run_crew_analysis(company_name, api_key, model):
+    """Run the CrewAI workflow for company analysis"""
+    try:
+        # Define tasks with more specific instructions
+        scraping_task = Task(
+            description=f"""Search for detailed information about {company_name}, including:
+            1. Company registration details
+            2. Financial information
+            3. Key executives and beneficial owners
+            4. Recent news and developments
+            5. Any risk indicators or regulatory issues""",
+            agent=scraper_agent,
+            expected_output="Comprehensive company information from multiple sources",
+            function=lambda: scrape_web_for_company(company_name)
+        )
+
+        processing_task = Task(
+            description="""Analyze the gathered information and structure it into:
+            1. Key company details
+            2. Financial metrics
+            3. Ownership structure
+            4. Risk assessment
+            Ensure all data is properly formatted and validated.""",
+            agent=processor_agent,
+            expected_output="Structured and analyzed company data",
+            function=lambda scraped_data: process_data_with_llm(scraped_data, api_key, model)
+        )
+
+        saving_task = Task(
+            description="Save the processed information in a structured format",
+            agent=writer_agent,
+            expected_output="Confirmation of data being saved",
+            function=lambda processed_data: save_to_core_dataset(company_name, processed_data)
+        )
+
+        # Create and run the crew with sequential process
+        crew = Crew(
+            agents=[scraper_agent, processor_agent, writer_agent],
+            tasks=[scraping_task, processing_task, saving_task],
+            verbose=True,
+            process=Process.sequential
+        )
+
+        result = crew.kickoff()
+        return result
+
+    except Exception as e:
+        st.error(f"CrewAI workflow failed: {str(e)}")
+        return None
 
 # Function definitions (unchanged from your original code)
 def generate_kyb_report(company_name, company_website, api_key, model):
@@ -302,46 +463,6 @@ def load_core_dataset():
         st.error(f"Failed to load core dataset: {str(e)}")
         return None
 
-# Add this function before the main logic section
-def run_crew_analysis(company_name, api_key, model):
-    """Run the CrewAI workflow for company analysis"""
-    try:
-        # Define tasks for each agent
-        scraping_task = Task(
-            description=f"Scrape web data about {company_name}",
-            agent=scraper_agent,
-            expected_output="Scraped text data about the company",
-            function=lambda: scrape_web_for_company(company_name)
-        )
-
-        processing_task = Task(
-            description="Process and summarize the scraped data",
-            agent=processor_agent,
-            expected_output="Processed and summarized company information",
-            function=lambda scraped_data: process_data_with_llm(scraped_data, api_key, model)
-        )
-
-        saving_task = Task(
-            description="Save the processed data to CSV",
-            agent=writer_agent,
-            expected_output="Confirmation of data being saved",
-            function=lambda processed_data: save_to_core_dataset(company_name, processed_data)
-        )
-
-        # Create and run the crew
-        crew = Crew(
-            agents=[scraper_agent, processor_agent, writer_agent],
-            tasks=[scraping_task, processing_task, saving_task],
-            verbose=2
-        )
-
-        result = crew.kickoff()
-        return result
-
-    except Exception as e:
-        st.error(f"CrewAI workflow failed: {str(e)}")
-        return None
-
 # Main logic section
 if input_choice == "Admin View":
     with st.form("admin_login"):
@@ -358,12 +479,12 @@ if input_choice == "Admin View":
                 st.error("Invalid credentials.")
 
 elif input_choice == "Enter Company Name" and run_button:
-    if not api_key:
-        st.error("Please enter your Groq API Key.")
-    elif not company_name:
-        st.error("Please enter a Company Name.")
-    else:
-        try:
+    try:
+        if not api_key:
+            st.error("Please enter your Groq API Key.")
+        elif not company_name:
+            st.error("Please enter a Company Name.")
+        else:
             # Load core dataset
             df = load_core_dataset()
             
@@ -395,105 +516,72 @@ elif input_choice == "Enter Company Name" and run_button:
                         timestamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                     )
                     display_report(kyb_report)
-        except Exception as e:
-            st.error(f"Error: {e}")
+    except Exception as e:
+        st.error(f"Error: {e}")
 
 elif input_choice == "Write Custom Prompt" and run_button:
-    if not api_key:
-        st.error("Please enter your Groq API Key.")
-    elif not custom_prompt:
-        st.error("Please enter your prompt.")
-    else:
-        result_df = process_prompt(custom_prompt, None, api_key, model_options[selected_model])
-        if result_df is not None and not result_df.empty:
-            st.success("Results found!")
-            st.dataframe(result_df, use_container_width=True)
+    try:
+        if not api_key:
+            st.error("Please enter your Groq API Key.")
+        elif not custom_prompt:
+            st.error("Please enter your prompt.")
         else:
-            st.warning("No results from prompt.")
+            result_df = process_prompt(custom_prompt, None, api_key, model_options[selected_model])
+            if result_df is not None and not result_df.empty:
+                st.success("Results found!")
+                st.dataframe(result_df, use_container_width=True)
+            else:
+                st.warning("No results from prompt.")
+    except Exception as e:
+        st.error(f"Error processing prompt: {e}")
 
 else:
     if not st.session_state.admin_logged_in:
         st.info("Select an input method and click 'Generate Report' to proceed.")
 
-# Keep using the regular function we already have:
-def scrape_web_for_company(company_name):
-    """Scrape additional data about the company from the web (e.g., news articles)."""
-    try:
-        search_url = f"https://www.google.com/search?q={company_name}+news+site:*.org+site:*.gov+-inurl:(signup | login)"
-        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/91.0.4472.124'}
-        res = requests.get(search_url, headers=headers, timeout=15)
-        res.raise_for_status()
-        soup = BeautifulSoup(res.text, 'html.parser')
-        snippets = soup.find_all('div', class_='BNeawe s3v9rd AP7Wnd')
-        text = ' '.join([snippet.get_text() for snippet in snippets[:3]])
-        if not text:
-            return "No additional data found."
-        return text
-    except Exception as e:
-        return f"Error scraping web: {str(e)}"
-
-def process_data_with_llm(text, api_key, model):
-    """Process the scraped data using Groq API."""
-    try:
-        client = Groq(api_key=api_key)
-        
-        system_prompt = """
-        You are a data analyst processing company information. Analyze and summarize the provided text.
-        Format your response as a structured JSON with these fields:
-        - summary: Brief overview of key points
-        - key_findings: List of important discoveries
-        - risk_factors: Any potential risk indicators identified
-        Ensure the response is properly formatted JSON.
-        """
-        
-        messages = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": f"Analyze this company information: {text}"}
-        ]
-        
-        response = client.chat.completions.create(
-            messages=messages,
-            model=model,
-            temperature=0.1,
-            max_tokens=1024
-        )
-        
-        output_text = response.choices[0].message.content
-        
-        if output_text.startswith("```json"):
-            output_text = output_text.replace("```json", "").replace("```", "")
-        
-        try:
-            processed_data = json.loads(output_text)
-            return processed_data
-        except json.JSONDecodeError:
-            return {
-                "summary": text[:500] + "...",
-                "key_findings": ["Error parsing LLM response"],
-                "risk_factors": ["Unable to analyze risk factors"]
-            }
-            
-    except Exception as e:
-        return {
-            "summary": text[:500] + "...",
-            "key_findings": [f"Error processing with LLM: {str(e)}"],
-            "risk_factors": ["Processing error"]
-        }
-
-def save_to_core_dataset(company_name, processed_data):
-    """Save the processed data into the core dataset CSV."""
-    try:
-        new_data = pd.DataFrame({
-            "company_name": [company_name],
-            "additional_info": [json.dumps(processed_data)],
-            "timestamp": [datetime.now().strftime("%Y-%m-%d %H:%M:%S")]
-        })
-        if os.path.exists(CORE_DATASET_PATH):
-            existing_data = pd.read_csv(CORE_DATASET_PATH)
-            updated_data = pd.concat([existing_data, new_data], ignore_index=True)
-        else:
-            updated_data = new_data
-        updated_data.to_csv(CORE_DATASET_PATH, index=False)
-        return f"Data saved to {CORE_DATASET_PATH}"
-    except Exception as e:
-        return f"Error saving to CSV: {str(e)}"
+def display_report(report_data):
+    """Display the KYB report in a structured format"""
+    st.header("KYB Report")
+    
+    # Basic Information
+    st.subheader("Basic Information")
+    col1, col2 = st.columns(2)
+    with col1:
+        st.write(f"**Company Name:** {report_data.get('company_name', 'N/A')}")
+        st.write(f"**Registration Number:** {report_data.get('registration_number', 'N/A')}")
+    with col2:
+        st.write(f"**Incorporation Date:** {report_data.get('incorporation_date', 'N/A')}")
+    
+    # Financial Summary
+    st.subheader("Financial Summary")
+    financial_summary = report_data.get('financial_summary', {})
+    if isinstance(financial_summary, dict):
+        for key, value in financial_summary.items():
+            st.write(f"**{key.replace('_', ' ').title()}:** {value}")
+    else:
+        st.write(financial_summary)
+    
+    # Beneficial Owners
+    st.subheader("Beneficial Owners")
+    beneficial_owners = report_data.get('beneficial_owners', [])
+    if beneficial_owners:
+        for owner in beneficial_owners:
+            if isinstance(owner, dict):
+                st.write(f"- **{owner.get('name', 'Unknown')}** ({owner.get('ownership_percentage', 'Unknown')})")
+            else:
+                st.write(f"- {owner}")
+    else:
+        st.write("No beneficial owners information available")
+    
+    # Risk Indicators
+    st.subheader("Risk Indicators")
+    risk_indicators = report_data.get('risk_indicators', [])
+    if risk_indicators:
+        for risk in risk_indicators:
+            st.write(f"- {risk}")
+    else:
+        st.write("No risk indicators identified")
+    
+    # Raw JSON
+    with st.expander("View Raw JSON"):
+        st.json(report_data)
