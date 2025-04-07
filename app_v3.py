@@ -136,12 +136,21 @@ def process_data_with_llm(text, api_key, model):
         client = Groq(api_key=api_key)
         
         system_prompt = """
-        You are a data analyst processing company information. Analyze and summarize the provided text.
-        Format your response as a structured JSON with these fields:
-        - summary: Brief overview of key points
-        - key_findings: List of important discoveries
-        - risk_factors: Any potential risk indicators identified
-        Ensure the response is properly formatted JSON.
+        You are a data analyst tasked with converting unstructured company data into a structured format.
+
+        Take the input under 'raw_text' and extract:
+        - summary
+        - key_findings
+        - risk_factors
+
+        Respond ONLY with a valid JSON object like:
+        {
+        "summary": "Short summary...",
+        "key_findings": ["fact1", "fact2"],
+        "risk_factors": ["risk1", "risk2"]
+        }
+
+        Don't include explanations or extra text. Use double quotes. Escape problematic characters.
         """
         
         messages = [
@@ -293,23 +302,39 @@ def run_crew_analysis(company_name, api_key, model):
         # Define tasks with more specific instructions
         scraping_task = Task(
             description=f"""Search for detailed information about {company_name}, including:
-            1. Company registration details
-            2. Financial information
-            3. Key executives and beneficial owners
-            4. Recent news and developments
-            5. Any risk indicators or regulatory issues""",
+            - Company registration details
+            - Financial information
+            - Key executives and beneficial owners
+            - Recent news and developments
+            - Any risk indicators or regulatory issues
+
+            Format your output as a JSON object like this:
+            {{
+                "raw_text": "<consolidated extracted text>"
+            }}
+
+            Ensure the string is enclosed in double quotes and properly escaped.
+            """,
             agent=scraper_agent,
-            expected_output="Comprehensive company information from multiple sources",
+            expected_output="JSON object with a 'raw_text' field containing all discovered info",
             max_iterations=3
         )
 
         processing_task = Task(
-            description="""Analyze the gathered information and structure it into:
-            1. Key company details
-            2. Financial metrics
-            3. Ownership structure
-            4. Risk assessment
-            Ensure all data is properly formatted and validated.""",
+            description="""Analyze the 'raw_text' field from the previous task and extract:
+            - summary
+            - key_findings
+            - risk_factors
+
+        Return your analysis ONLY as valid JSON, with this structure:
+        {
+        "summary": "...",
+        "key_findings": [...],
+        "risk_factors": [...]
+        }
+
+        Avoid extra commentary or explanation.
+        """,
             agent=processor_agent,
             expected_output="Structured and analyzed company data in JSON format",
             context=[scraping_task]
