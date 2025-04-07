@@ -79,7 +79,6 @@ with st.sidebar:
 def scrape_web_for_company(company_name):
     """Enhanced web scraping for company information"""
     try:
-        # Search multiple sources
         sources = [
             f"https://www.google.com/search?q={company_name}+company+registration+information",
             f"https://www.google.com/search?q={company_name}+financial+results+annual+report",
@@ -91,44 +90,40 @@ def scrape_web_for_company(company_name):
         headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
         }
-        
+
         for search_url in sources:
             try:
                 res = requests.get(search_url, headers=headers, timeout=15)
                 res.raise_for_status()
                 soup = BeautifulSoup(res.text, 'html.parser')
 
-                # Try multiple selectors to find search snippets
                 snippets = []
-                # Selector 1: Common Google search result snippet class
                 for selector in [
                     ('div', {'class': 'BNeawe s3v9rd AP7Wnd'}),
-                    ('div', {'class': 'BNeawe vvjwJb AP7Wnd'}),  # Title of the result
-                    ('span', {'class': 'aCOpRe'}),  # Description snippet
-                    ('div', {'class': 'VwiC3b yXK7lf lVm3ye r025kc hJNv7e'})  # Another common snippet class
+                    ('div', {'class': 'BNeawe vvjwJb AP7Wnd'}),
+                    ('span', {'class': 'aCOpRe'}),
+                    ('div', {'class': 'VwiC3b yXK7lf lVm3ye r025kc hJNv7e'})
                 ]:
                     elements = soup.find_all(selector[0], selector[1])
                     snippets.extend([element.get_text(separator=" ", strip=True) for element in elements if element.get_text().strip()])
 
-                # If no snippets found, try extracting text from the main content area
                 if not snippets:
                     main_content = soup.find('div', {'id': 'main'})
                     if main_content:
-                        snippets.extend([main_content.get_text(separator=" ", strip=True)[:500]])
+                        snippets.append(main_content.get_text(separator=" ", strip=True)[:500])
 
-                # Filter out empty snippets and join
-                text = ' '.join([snippet for snippet in snippets if snippet])
+                text = ' '.join(snippets)
                 if text:
                     all_data.append(text)
             except Exception as e:
                 st.warning(f"Failed to scrape {search_url}: {str(e)}")
                 continue
-        
-        combined_data = ' '.join(all_data)
-        return combined_data if combined_data else "No additional data found from web scraping."
-        
+
+        combined_data = ' '.join(all_data).strip()
+        return {"raw_text": combined_data if combined_data else "No useful data found"}
+
     except Exception as e:
-        return f"Error scraping web: {str(e)}"
+        return {"raw_text": f"Error scraping web: {str(e)}"}
 
 def process_data_with_llm(text, api_key, model):
     """Process the scraped data using Groq API."""
@@ -280,15 +275,13 @@ def create_agents(api_key, model):
 def run_crew_analysis(company_name, api_key, model):
     """Run the CrewAI workflow for company analysis"""
     try:
-        # First, test the Groq API directly
+        # Step 1: Test Groq LLM
         st.write("Testing Groq API connection...")
         test_client = Groq(api_key=api_key)
         try:
             test_response = test_client.chat.completions.create(
                 model=model,
-                messages=[
-                    {"role": "user", "content": "Hello, are you working?"},
-                ]
+                messages=[{"role": "user", "content": "Hello, are you working?"}]
             )
             st.success("Test LLM response succeeded")
             st.write(test_response.choices[0].message.content)
@@ -296,59 +289,59 @@ def run_crew_analysis(company_name, api_key, model):
             st.error(f"Test Groq LLM failed: {str(e)}")
             return None
 
-        # Create agents with the Groq LLM
+        # Step 2: Create agents
         scraper_agent, processor_agent, writer_agent = create_agents(api_key, model)
 
-        # Define tasks with more specific instructions
+        # Step 3: Define tasks with templated input/output
         scraping_task = Task(
-            description=f"""Search for detailed information about {company_name}, including:
-            - Company registration details
-            - Financial information
-            - Key executives and beneficial owners
-            - Recent news and developments
-            - Any risk indicators or regulatory issues
+            description=f"""Gather public information about {company_name}, including:
+- Company registration
+- Financial results
+- Key executives or owners
+- News mentions
+- Risks or controversies
 
-            Format your output as a JSON object like this:
-            {{
-                "raw_text": "<consolidated extracted text>"
-            }}
+Return a **JSON object** like:
+{{
+  "raw_text": "<scraped and cleaned company data>"
+}}
 
-            Ensure the string is enclosed in double quotes and properly escaped.
-            """,
+Ensure double quotes are escaped and the output is valid JSON.
+""",
             agent=scraper_agent,
-            expected_output="JSON object with a 'raw_text' field containing all discovered info",
+            expected_output="JSON object with 'raw_text' field",
             max_iterations=3
         )
 
         processing_task = Task(
-            description="""Analyze the 'raw_text' field from the previous task and extract:
-            - summary
-            - key_findings
-            - risk_factors
+            description="""
+Analyze the following scraped company information:
 
-        Return your analysis ONLY as valid JSON, with this structure:
-        {
-        "summary": "...",
-        "key_findings": [...],
-        "risk_factors": [...]
-        }
+{{ raw_text }}
 
-        Avoid extra commentary or explanation.
-        """,
+Extract key insights and return a valid JSON object like:
+{
+  "summary": "Brief overview...",
+  "key_findings": ["..."],
+  "risk_factors": ["..."]
+}
+
+Don't include any commentary or formatting — just return the JSON.
+""",
             agent=processor_agent,
-            expected_output="Structured and analyzed company data in JSON format",
+            expected_output="Structured analysis in JSON format",
             context=[scraping_task]
         )
 
         saving_task = Task(
-            description=f"Save the processed information for {company_name} in a structured format",
+            description=f"Save the structured data for {company_name} to the core dataset and confirm.",
             agent=writer_agent,
-            expected_output="Confirmation of data being saved",
+            expected_output="Confirmation message that data has been saved.",
             context=[processing_task],
             function=lambda processed_data: (company_name, processed_data)
         )
 
-        # Create and run the crew with sequential process
+        # Step 4: Run the workflow
         crew = Crew(
             agents=[scraper_agent, processor_agent, writer_agent],
             tasks=[scraping_task, processing_task, saving_task],
@@ -356,21 +349,21 @@ def run_crew_analysis(company_name, api_key, model):
             process=Process.sequential
         )
 
-        # Run the crew and add debugging information
         result = crew.kickoff(inputs={"company_name": company_name})
-        
-        # Debug the result
-        if result is None:
-            st.warning("Crew returned None. Debugging further...")
-            st.write(f"Scraper Agent LLM: {scraper_agent.llm}")
-            st.write(f"Model Used: {model}")
-            st.write(f"Company Name: {company_name}")
+
+        # Step 5: Output handling
+        if result is None or result.strip() == "":
+            st.warning("CrewAI workflow returned empty result.")
             return "No additional data found from CrewAI analysis."
-            
-        if result.strip() == "":
-            st.warning("CrewAI analysis returned empty result.")
-            return "No additional data found from CrewAI analysis."
-            
+
+        # Optional: show result if it's structured
+        if isinstance(result, dict):
+            st.subheader("CrewAI Final Result")
+            st.json(result)
+        else:
+            st.subheader("CrewAI Final Result")
+            st.code(result)
+
         return result
 
     except Exception as e:
